@@ -591,30 +591,68 @@ app.get("/api/sp/:id/performance/timeline", async (req, res) => {
 
   try {
     const sql = `
-      SELECT time_bucket AS time, checkType,
-        sumIf(increase, value = 'success') AS success,
-        sumIf(increase, value LIKE 'failure%') AS failed
-      FROM (
-        SELECT checkType, value, time_bucket,
-          if(max_val < lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY minute_bucket),
-            max_val,
-            max_val - lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY minute_bucket)
-          ) AS increase, minute_bucket
+      WITH storage_raw AS (
+        SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
+          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
+            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+          avgMerge(value_avg) AS inner_value
+        FROM ${DEALBOT_METRICS}
+        WHERE name = 'dataStorageStatus'
+          AND dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
+          AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+        GROUP BY time, time_bucket, status, series_id
+      ),
+      storage_values AS (
+        SELECT time, time_bucket, status, sum(inner_value) AS value
+        FROM storage_raw GROUP BY time, time_bucket, status
+      ),
+      storage_deltas AS (
+        SELECT time_bucket, status,
+          if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
         FROM (
-          SELECT toStartOfMinute(dt) AS minute_bucket, ${bucket} AS time_bucket,
-            JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
-            JSONExtract(tags, 'value', 'Nullable(String)') AS value,
-            maxMerge(value_max) AS max_val
-          FROM ${DEALBOT_METRICS}
-          WHERE dt > now() - INTERVAL ${hours} HOUR
-            AND name = 'retrievalStatus'
-            AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-            AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
-            AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
-          GROUP BY minute_bucket, time_bucket, checkType, value
-          ORDER BY checkType, value, minute_bucket
+          SELECT time, time_bucket, status, value,
+            lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
+          FROM storage_values
         )
+      ),
+      ret_raw AS (
+        SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
+          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
+            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+          avgMerge(value_avg) AS inner_value
+        FROM ${DEALBOT_METRICS}
+        WHERE name = 'retrievalStatus'
+          AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
+          AND dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
+          AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+        GROUP BY time, time_bucket, status, series_id
+      ),
+      ret_values AS (
+        SELECT time, time_bucket, status, sum(inner_value) AS value
+        FROM ret_raw GROUP BY time, time_bucket, status
+      ),
+      ret_deltas AS (
+        SELECT time_bucket, status,
+          if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
+        FROM (
+          SELECT time, time_bucket, status, value,
+            lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
+          FROM ret_values
+        )
+      ),
+      combined AS (
+        SELECT time_bucket, 'dataStorage' AS checkType, status,  delta FROM storage_deltas
+        UNION ALL
+        SELECT time_bucket, 'retrieval' AS checkType, status, delta FROM ret_deltas
       )
+      SELECT time_bucket AS time, checkType,
+        sumIf(delta, status = 'success') AS success,
+        sumIf(delta, status = 'failure') AS failed
+      FROM combined
       GROUP BY time_bucket, checkType
       ORDER BY time_bucket ASC
       FORMAT JSONEachRow`
@@ -664,36 +702,49 @@ app.get("/api/sp/:id/performance/latency", async (req, res) => {
   }
 })
 
-// Dealbot metrics table (Prometheus, infra_prod)
+// Dealbot metrics table (infra_prod)
 const DEALBOT_METRICS = "remote(t468215_infra_prod_metrics)"
 
-// Counter increase SQL: detects Prometheus counter resets and sums increments
-// Uses window function lagInFrame to compare consecutive 1-min buckets
-function counterIncreaseSql(hours, providerFilter) {
+// Dealbot counter delta SQL — matches Better Stack dashboard pattern exactly:
+// 1. avgMerge(value_avg) grouped by series_id to get per-pod values
+// 2. sum() across series to get total per time bucket
+// 3. lagInFrame to compute deltas between consecutive buckets
+// 4. greatest(delta, 0) to handle counter resets
+function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter) {
+  const ctFilter = checkTypeFilter
+    ? `AND JSONExtract(tags, 'checkType', 'Nullable(String)') = '${checkTypeFilter}'`
+    : ""
   return `
-    SELECT checkType, value, sum(increase) AS cnt
-    FROM (
-      SELECT checkType, value,
-        if(max_val < lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY bucket),
-          max_val,
-          max_val - lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY bucket)
-        ) AS increase, bucket
+    WITH raw AS (
+      SELECT toStartOfFiveMinutes(dt) AS time,
+        if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
+          JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+        avgMerge(value_avg) AS inner_value
+      FROM ${DEALBOT_METRICS}
+      WHERE name = '${metricName}'
+        AND dt > now() - INTERVAL ${hours} HOUR
+        AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+        AND ${providerFilter}
+        ${ctFilter}
+      GROUP BY time, status, series_id
+    ),
+    series_values AS (
+      SELECT time, status, sum(inner_value) AS value
+      FROM raw GROUP BY time, status
+    ),
+    series_deltas AS (
+      SELECT status,
+        if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
       FROM (
-        SELECT toStartOfMinute(dt) AS bucket,
-          JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
-          JSONExtract(tags, 'value', 'Nullable(String)') AS value,
-          maxMerge(value_max) AS max_val
-        FROM ${DEALBOT_METRICS}
-        WHERE dt > now() - INTERVAL ${hours} HOUR
-          AND name = 'retrievalStatus'
-          AND ${providerFilter}
-          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
-        GROUP BY bucket, checkType, value
-        ORDER BY checkType, value, bucket
+        SELECT time, status, value,
+          lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
+        FROM series_values
       )
     )
-    GROUP BY checkType, value
-    ORDER BY checkType, value
+    SELECT status AS value, sum(delta) AS cnt
+    FROM series_deltas
+    GROUP BY status
+    ORDER BY status
     FORMAT JSONEachRow`
 }
 
@@ -704,34 +755,50 @@ app.get("/api/network/performance", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const sql = `
-      SELECT providerId, checkType, value, sum(increase) AS cnt
-      FROM (
-        SELECT providerId, checkType, value,
-          if(max_val < lagInFrame(max_val, 1, 0) OVER (PARTITION BY providerId, checkType, value ORDER BY bucket),
-            max_val,
-            max_val - lagInFrame(max_val, 1, 0) OVER (PARTITION BY providerId, checkType, value ORDER BY bucket)
-          ) AS increase, bucket
-        FROM (
-          SELECT toStartOfMinute(dt) AS bucket,
+    function bulkDeltaSql(metricName, checkType, checkTypeFilter) {
+      const ctFilter = checkTypeFilter
+        ? `AND JSONExtract(tags, 'checkType', 'Nullable(String)') = '${checkTypeFilter}'`
+        : ""
+      return `
+        WITH raw AS (
+          SELECT toStartOfFiveMinutes(dt) AS time,
             JSONExtract(tags, 'providerId', 'Nullable(String)') AS providerId,
-            JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
-            JSONExtract(tags, 'value', 'Nullable(String)') AS value,
-            maxMerge(value_max) AS max_val
+            if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
+              JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+            avgMerge(value_avg) AS inner_value
           FROM ${DEALBOT_METRICS}
-          WHERE dt > now() - INTERVAL 24 HOUR
-            AND name = 'retrievalStatus'
-            AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+          WHERE name = '${metricName}'
+            AND dt > now() - INTERVAL 24 HOUR
             AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
-          GROUP BY bucket, providerId, checkType, value
-          ORDER BY providerId, checkType, value, bucket
+            AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+            ${ctFilter}
+          GROUP BY time, providerId, status, series_id
+        ),
+        series_values AS (
+          SELECT time, providerId, status, sum(inner_value) AS value
+          FROM raw GROUP BY time, providerId, status
+        ),
+        series_deltas AS (
+          SELECT providerId, status,
+            if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
+          FROM (
+            SELECT time, providerId, status, value,
+              lagInFrame(value) OVER (PARTITION BY providerId, status ORDER BY time) AS prev_value
+            FROM series_values
+          )
         )
-      )
-      GROUP BY providerId, checkType, value
-      ORDER BY providerId, checkType, value
-      FORMAT JSONEachRow`
+        SELECT providerId, '${checkType}' AS checkType, status AS value, sum(delta) AS cnt
+        FROM series_deltas
+        GROUP BY providerId, status
+        FORMAT JSONEachRow`
+    }
 
-    const rows = await queryDealbot(sql)
+    const [storageRows, retrievalRows] = await Promise.all([
+      queryDealbot(bulkDeltaSql("dataStorageStatus", "dataStorage", null)),
+      queryDealbot(bulkDeltaSql("retrievalStatus", "retrieval", "retrieval")),
+    ])
+
+    const rows = [...storageRows, ...retrievalRows]
 
     // Aggregate per provider
     const byProvider = {}
@@ -740,7 +807,7 @@ app.get("/api/network/performance", async (req, res) => {
       if (!byProvider[pid]) byProvider[pid] = {}
       if (!byProvider[pid][r.checkType]) byProvider[pid][r.checkType] = { success: 0, failed: 0 }
       if (r.value === "success") byProvider[pid][r.checkType].success += r.cnt
-      else if (r.value && r.value.startsWith("failure")) byProvider[pid][r.checkType].failed += r.cnt
+      else if (r.value === "failure") byProvider[pid][r.checkType].failed += r.cnt
     }
 
     cache.set(cacheKey, byProvider, BS_TTL)
@@ -765,8 +832,9 @@ app.get("/api/sp/:id/performance", async (req, res) => {
     const provFilter = `JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
       AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
 
-    // Status counters using counter increase detection
-    const counterSql = counterIncreaseSql(hours, provFilter)
+    // Data Storage (deals) and Retrieval - separate metrics, matching Better Stack dashboard
+    const storageSql = dealbotDeltaSql("dataStorageStatus", hours, provFilter, null)
+    const retrievalSql = dealbotDeltaSql("retrievalStatus", hours, provFilter, "retrieval")
 
     // Timing averages from _sum/_count gauge pairs
     const timingSql = `
@@ -788,10 +856,17 @@ app.get("/api/sp/:id/performance", async (req, res) => {
       ORDER BY name
       FORMAT JSONEachRow`
 
-    const [counters, timingRaw] = await Promise.all([
-      queryDealbot(counterSql),
+    const [storageCounters, retrievalCounters, timingRaw] = await Promise.all([
+      queryDealbot(storageSql),
+      queryDealbot(retrievalSql),
       queryDealbot(timingSql),
     ])
+
+    // Merge into unified counters array with checkType
+    const counters = [
+      ...storageCounters.map(c => ({ checkType: "dataStorage", ...c })),
+      ...retrievalCounters.map(c => ({ checkType: "retrieval", ...c })),
+    ]
 
     // Compute averages from _sum / _count pairs
     const sums = {}, counts = {}
