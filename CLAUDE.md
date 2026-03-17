@@ -23,12 +23,22 @@ Team: FOC WG (t468215). See memory file `reference_betterstack_sources.md` for f
 **Dealbot Metrics** (Prometheus, sources 1726029 + 1701980):
 - **Mainnet**: `remote(t468215_infra_prod_metrics)` via dealbot host (us-east-9)
 - **Calibnet**: `remote(t468215_infra_staging_2_metrics)` via dealbot host
-- Metric name: `retrievalStatus` with tags: `checkType` (dataStorage/retrieval/dataRetention), `value` (success/failure.*), `providerId`, `network` (mainnet/calibration)
+- Better Stack dashboard source ID: 1678396 (NOT 1678395)
+- Data Storage uses metric `dataStorageStatus` (NOT `retrievalStatus`)
+- Retrieval uses `retrievalStatus` with `checkType = 'retrieval'`
+- Data Retention uses `dataSetChallengeStatus` with `checkType = 'dataRetention'`
 - Timing: `retrievalCheckMs`, `ipfsRetrievalFirstByteMs`, `ipfsRetrievalLastByteMs`, `ipfsRetrievalThroughputBps`, `ipniVerifyMs`
-- Timing averages: use `_sum` / `_count` gauge pairs (avgMerge returns null for histograms)
+- Timing averages: use `_sum` / `_count` gauge pairs (`buckets_sum_rate`/`buckets_count_rate` are EMPTY on mainnet)
 - Old metric names (deals_created_total, retrievals_tested_total etc) stopped 2026-03-03 after dealbot upgrade
 - CRITICAL: `countMerge(events_count)` counts Prometheus SCRAPE data points (~5700/day), NOT actual test events (~30-140/day)
-- Correct aggregation: use `maxMerge(value_max)` per 1-min bucket with `lagInFrame` window function to detect counter resets and sum increments (see `counterIncreaseSql()` in server.js)
+- Multiple dealbot pods run concurrently -- MUST group by `series_id` or counts are wrong
+- Correct aggregation pattern (from Better Stack dashboard, see `dealbotDeltaSql()` in server.js):
+  1. `avgMerge(value_avg)` grouped by `series_id` (per-pod values)
+  2. `sum()` across series (total per time bucket)
+  3. `lagInFrame(value) OVER (PARTITION BY status ORDER BY time)` for deltas
+  4. `greatest(value - prev_value, 0)` to handle counter resets
+  5. `if(isNull(prev_value), 0, ...)` to skip first row baseline
+- URL params (`setId`, `railId`) MUST be validated as numeric before GraphQL interpolation
 
 ### 2. PDP Scan Subgraph (On-Chain Proofs)
 - Endpoint: `https://api.goldsky.com/api/public/project_cmdfaaxeuz6us01u359yjdctw/subgraphs/pdp-explorer/mainnet311b/gn`
@@ -84,6 +94,8 @@ Team: FOC WG (t468215). See memory file `reference_betterstack_sources.md` for f
 - Host: 77.42.75.71, PM2 process `pdp-sp-dashboard`, port 3848
 - Domain: spdash.ezpdpz.net (A record, no Cloudflare)
 - nginx reverse proxy routes by hostname on port 80
+- nginx config: `/etc/nginx/sites-enabled/apps.conf`
+- Other services on same host: focify.me:8090, gateway.focify.me:8880, sp-health:3847
 - Deploy: `rsync -avz --exclude='node_modules' --exclude='.env' . 77.42.75.71:~/pdp-sp-dashboard/ && ssh 77.42.75.71 'pm2 restart pdp-sp-dashboard'`
 
 ## Critical Rules
@@ -122,6 +134,8 @@ Team: FOC WG (t468215). See memory file `reference_betterstack_sources.md` for f
 - FWSS has `status` (Active/Terminated) that PDP Scan lacks (PDP Scan `isActive` is always true)
 
 ### Frontend Rules
+- Tabs: performance (default), proving, economics, logs (overview was removed)
+- SP detail loads performance first, then proving+economics in parallel, then revenue async
 - `.panel > div` CSS forces `flex-direction: column` -- add `:not()` exclusions for grids/flex containers inside panels
 - Static file changes need cache-busting (`?v=N` on CSS/JS links in index.html) or browser hard refresh
 - Tab content is `display:none` when hidden -- canvas charts need redraw on tab switch (getBoundingClientRect returns 0)
