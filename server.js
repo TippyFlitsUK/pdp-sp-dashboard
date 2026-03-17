@@ -741,7 +741,7 @@ function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter) {
         FROM series_values
       )
     )
-    SELECT status AS value, sum(delta) AS cnt
+    SELECT status AS value, toUInt64(round(sum(delta))) AS cnt
     FROM series_deltas
     GROUP BY status
     ORDER BY status
@@ -787,7 +787,7 @@ app.get("/api/network/performance", async (req, res) => {
             FROM series_values
           )
         )
-        SELECT providerId, '${checkType}' AS checkType, status AS value, sum(delta) AS cnt
+        SELECT providerId, '${checkType}' AS checkType, status AS value, toUInt64(round(sum(delta))) AS cnt
         FROM series_deltas
         GROUP BY providerId, status
         FORMAT JSONEachRow`
