@@ -28,20 +28,26 @@ async function loadSPDetail(sp) {
     document.getElementById("logs-content").innerHTML = ""
   }
 
-  // Load performance first (default tab), then proving+economics in parallel, then revenue async
-  await loadPerformance(sp)
-  await Promise.all([loadProving(sp), loadEconomics(sp)])
-  loadRevenue(sp)
-
-  if (sp.hasLogs) {
-    loadLogsSummary(sp)
-    await loadSPTimeline(sp)
-    await loadSPErrors(sp)
-    await loadSPPatterns(sp)
-    await loadSPLogs(sp)
-  }
+  // Only load the active tab — other tabs load lazily on click
+  await loadTabData(currentTab || "performance", sp)
 
   document.getElementById("last-updated").textContent = "Updated " + new Date().toLocaleTimeString()
+}
+
+// Lazy-load tab data on demand
+async function loadTabData(tab, sp) {
+  if (tab === "performance" && !spDataCache.performance) {
+    await loadPerformance(sp)
+  } else if (tab === "proving" && !spDataCache.proving) {
+    await loadProving(sp)
+  } else if (tab === "economics" && !spDataCache.economics) {
+    await loadEconomics(sp)
+    loadRevenue(sp)
+  } else if (tab === "logs" && !spDataCache.logs && sp.hasLogs) {
+    loadLogsSummary(sp)
+    await Promise.all([loadSPTimeline(sp), loadSPErrors(sp), loadSPPatterns(sp), loadSPLogs(sp)])
+    spDataCache.logs = true
+  }
 }
 
 // ============================================================
@@ -79,37 +85,30 @@ function summaryGrid(items) {
   }).join("") + '</div>'
 }
 
-// Show faults modal - filter 'all' or '7d'
-function showFaultsModal(period) {
+// Show faults modal - shows per-dataset fault breakdown
+function showFaultsModal() {
   var data = spDataCache.proving
-  if (!data || !data.faults) return
+  if (!data) return
 
-  var faults = data.faults
-  var title = "Faulted Periods (All Time)"
-
-  if (period === "7d") {
-    title = "Faulted Periods (Last 7 Days)"
-    var sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 86400
-    faults = faults.filter(function(f) { return Number(f.createdAt) >= sevenDaysAgo })
-  }
-
+  var dataSets = data.dataSets || []
   var body = document.getElementById("faults-modal-body")
-  document.getElementById("faults-modal-title").textContent = title
+  document.getElementById("faults-modal-title").textContent = "Faulted Periods by Dataset"
 
-  if (!faults.length) {
-    body.innerHTML = '<div class="no-data">No faults recorded</div>'
+  var faulted = dataSets.filter(function(ds) { return Number(ds.totalFaultedPeriods || 0) > 0 })
+
+  if (!faulted.length) {
+    body.innerHTML = '<div class="no-data">No faults recorded across any datasets</div>'
   } else {
-    var html = '<table style="width:100%"><thead><tr><th>Data Set</th><th>Periods</th><th>Deadline</th><th>Time</th><th>Block</th></tr></thead><tbody>'
-    for (var i = 0; i < faults.length; i++) {
-      var f = faults[i]
-      var time = f.createdAt ? formatTime(new Date(Number(f.createdAt) * 1000).toISOString()) : '-'
-      var block = f.blockNumber ? Number(f.blockNumber).toLocaleString() : '-'
+    var html = '<table style="width:100%"><thead><tr><th>Data Set</th><th>Status</th><th>Faulted Periods</th><th>Faulted Roots</th><th>Created</th></tr></thead><tbody>'
+    for (var i = 0; i < faulted.length; i++) {
+      var ds = faulted[i]
+      var created = ds.createdAt ? formatTime(new Date(Number(ds.createdAt) * 1000).toISOString()) : '-'
       html += '<tr>' +
-        '<td>' + (f.dataSetId || (f.proofSet ? f.proofSet.setId : '-')) + '</td>' +
-        '<td class="level-error">' + f.periodsFaulted + '</td>' +
-        '<td>' + Number(f.deadline || 0).toLocaleString() + '</td>' +
-        '<td>' + time + '</td>' +
-        '<td>' + block + '</td>' +
+        '<td>' + (ds.setId || ds.id) + '</td>' +
+        '<td><span class="badge ' + (ds.isActive ? 'active' : 'inactive') + '">' + (ds.isActive ? 'Active' : 'Inactive') + '</span></td>' +
+        '<td class="level-error">' + Number(ds.totalFaultedPeriods || 0) + '</td>' +
+        '<td class="level-error">' + Number(ds.totalFaultedRoots || 0) + '</td>' +
+        '<td>' + created + '</td>' +
       '</tr>'
     }
     html += '</tbody></table>'
@@ -129,10 +128,10 @@ async function showDatasetModal(spId, setId) {
   try {
     var data = await fetchJSON(apiUrl("/api/sp/" + spId + "/dataset/" + setId))
     var pdp = data.pdp || {}
-    var faults = data.faults || []
 
-    var status = pdp.isActive ? "Active" : "Inactive"
-    var statusClass = status === "Active" ? "active" : "inactive"
+    var hasData = Number(pdp.totalRoots || 0) > 0 || pdp.totalDataSize !== "0"
+    var status = hasData ? "Active" : "Terminated"
+    var statusClass = hasData ? "active" : "terminated"
 
     var created = pdp.createdAt ? formatTime(new Date(Number(pdp.createdAt) * 1000).toISOString()) : '-'
     var updated = pdp.updatedAt ? formatTime(new Date(Number(pdp.updatedAt) * 1000).toISOString()) : '-'
@@ -165,25 +164,9 @@ async function showDatasetModal(spId, setId) {
     // Faults
     html += '<div class="dd-section">' +
       '<h4>Faults</h4>' +
-      '<div class="dd-row"><span>Faulted Periods</span><span class="' + (Number(pdp.totalFaultedPeriods) > 0 ? 'level-error' : '') + '">' + Number(pdp.totalFaultedPeriods || 0) + '</span></div>'
-    if (faults.length > 0) {
-      html += '<table style="margin-top:8px"><thead><tr><th>Periods</th><th>Deadline</th><th>Time</th><th>Block</th></tr></thead><tbody>'
-      for (var i = 0; i < faults.length; i++) {
-        var f = faults[i]
-        var time = f.createdAt ? formatTime(new Date(Number(f.createdAt) * 1000).toISOString()) : '-'
-        var block = f.blockNumber ? Number(f.blockNumber).toLocaleString() : '-'
-        html += '<tr>' +
-          '<td class="level-error">' + f.periodsFaulted + '</td>' +
-          '<td>' + Number(f.deadline || 0).toLocaleString() + '</td>' +
-          '<td>' + time + '</td>' +
-          '<td>' + block + '</td>' +
-        '</tr>'
-      }
-      html += '</tbody></table>'
-    } else {
-      html += '<div style="color:var(--text-muted);font-size:12px;margin-top:4px">No fault records</div>'
-    }
-    html += '</div>'
+      '<div class="dd-row"><span>Faulted Periods</span><span class="' + (Number(pdp.totalFaultedPeriods) > 0 ? 'level-error' : '') + '">' + Number(pdp.totalFaultedPeriods || 0) + '</span></div>' +
+      '<div class="dd-row"><span>Faulted Roots</span><span class="' + (Number(pdp.totalFaultedRoots) > 0 ? 'level-error' : '') + '">' + Number(pdp.totalFaultedRoots || 0) + '</span></div>' +
+    '</div>'
 
     // Storage & Economics
     html += '<div class="dd-section">' +
@@ -213,12 +196,13 @@ async function loadProving(sp) {
 
     var prov = data.provider || {}
 
-    // Count faults from actual records (same source as modal)
-    var allFaults = data.faults || []
-    var sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 86400
-    var faults7d = allFaults.filter(function(f) { return Number(f.createdAt) >= sevenDaysAgo })
-    var totalFaultPeriods = allFaults.reduce(function(sum, f) { return sum + (f.periodsFaulted || 1) }, 0)
-    var faultPeriods7d = faults7d.reduce(function(sum, f) { return sum + (f.periodsFaulted || 1) }, 0)
+    // Fault counts from provider entity (all time) and weekly activity (recent)
+    var totalFaultPeriods = Number(prov.totalFaultedPeriods || 0)
+    // Sum recent weekly faults for approximate 7d count
+    var faultPeriods7d = 0
+    if (data.weeklyActivity && data.weeklyActivity.length > 0) {
+      faultPeriods7d = Number(data.weeklyActivity[0].totalFaultedPeriods || 0)
+    }
 
     // Last Success = latest week's success rate (matching PDP Scan)
     var latestWeek = data.weeklyActivity && data.weeklyActivity[0] ? data.weeklyActivity[0] : null
@@ -234,12 +218,12 @@ async function loadProving(sp) {
       { label: "Data Stored", value: formatBytes(prov.totalDataSize) },
       { label: "Total Pieces", value: Number(prov.totalRoots || 0).toLocaleString() },
     ]) + '<div class="summary-grid">' +
-      '<div class="sg-card clickable" onclick="showFaultsModal(\'all\')">' +
+      '<div class="sg-card clickable" onclick="showFaultsModal()">' +
         '<div class="stat-label">Faulted Periods (All Time)</div>' +
         '<div class="stat-value ' + (totalFaultPeriods > 0 ? 'errors' : '') + '">' + totalFaultPeriods + '</div>' +
       '</div>' +
-      '<div class="sg-card clickable" onclick="showFaultsModal(\'7d\')">' +
-        '<div class="stat-label">Faulted Periods (7d)</div>' +
+      '<div class="sg-card clickable" onclick="showFaultsModal()">' +
+        '<div class="stat-label">Faulted Periods (This Week)</div>' +
         '<div class="stat-value ' + (faultPeriods7d > 0 ? 'errors' : 'green') + '">' + faultPeriods7d + '</div>' +
       '</div>' +
       '<div class="sg-card">' +
@@ -277,7 +261,7 @@ async function loadProving(sp) {
           ' data-createdat="' + Number(ds.createdAt || 0) + '"' +
         '>' +
           '<td>' + (ds.setId || ds.id) + '</td>' +
-          '<td><span class="badge ' + (ds.status === "Active" ? "active" : "inactive") + '">' + escapeHtml(ds.status || "Unknown") + '</span></td>' +
+          '<td><span class="badge ' + (ds.status === "Active" ? "active" : "terminated") + '">' + escapeHtml(ds.status || "Unknown") + '</span></td>' +
           '<td>' + formatBytes(ds.totalDataSize) + '</td>' +
           '<td>' + Number(ds.totalRoots || ds.leafCount || 0).toLocaleString() + '</td>' +
           '<td>' + Number(ds.lastProvenEpoch || 0).toLocaleString() + '</td>' +
@@ -711,7 +695,8 @@ async function loadPerfTimeline(sp) {
   try {
     var container = document.getElementById("perf-chart-container")
     if (container) container.innerHTML = '<div class="loading">Loading chart</div>'
-    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/performance/timeline?hours=" + selectedPerfHours))
+    var perf = spDataCache.performance
+    var data = perf ? perf.timeline || [] : []
     if (!data || !data.length) {
       if (container) container.innerHTML = '<canvas id="perf-chart-canvas"></canvas>'
       return
@@ -760,7 +745,8 @@ async function loadPerfLatency(sp) {
   try {
     var container = document.getElementById("latency-chart-container")
     if (container) container.innerHTML = '<div class="loading">Loading chart</div>'
-    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/performance/latency?hours=" + selectedPerfHours))
+    var perf = spDataCache.performance
+    var data = perf ? perf.latency || [] : []
     if (!data || !data.length) {
       if (container) container.innerHTML = '<canvas id="latency-chart-canvas"></canvas>'
       return
@@ -928,8 +914,6 @@ async function loadLogsSummary(sp) {
   var cardsEl = document.getElementById("log-summary-cards")
   if (!cardsEl) return
   var logs = sp.logHealth || {}
-  var errCls = (logs.errors || 0) > 100 ? "rate-bad" : (logs.errors || 0) > 0 ? "rate-warn" : "rate-good"
-  var warnCls = (logs.warns || 0) > 0 ? "rate-warn" : "rate-good"
   cardsEl.innerHTML = summaryGrid([
     { label: "Errors", value: formatNum(logs.errors || 0), cls: "errors" },
     { label: "Warnings", value: formatNum(logs.warns || 0), cls: "warnings" },

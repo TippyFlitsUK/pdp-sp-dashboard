@@ -86,6 +86,7 @@ function renderSPGrid(container, providers, perfData) {
         '<span class="heartbeat-dot ' + bulletCls + '"></span>' +
         '<span class="sp-home-name">' + escapeHtml(sp.name) + '</span>' +
         '<span class="sp-period">72h</span>' +
+        '<span class="sp-addr" title="Click to copy" data-addr="' + escapeHtml(sp.address) + '">' + escapeHtml(sp.address) + '</span>' +
       '</div>' +
       '<span class="sp-id">ID ' + sp.id + '</span>' +
     '</div>'
@@ -118,8 +119,27 @@ function renderSPGrid(container, providers, perfData) {
   container.innerHTML = html
 
   container.querySelectorAll(".sp-home-card").forEach(function(card) {
-    card.addEventListener("click", function() {
+    card.addEventListener("click", function(e) {
+      if (e.target.classList.contains("sp-addr")) return
       navigate("#sp/" + card.dataset.spid)
+    })
+  })
+
+  container.querySelectorAll(".sp-addr").forEach(function(el) {
+    el.addEventListener("click", function(e) {
+      e.stopPropagation()
+      var addr = el.dataset.addr
+      var ta = document.createElement("textarea")
+      ta.value = addr
+      ta.style.position = "fixed"
+      ta.style.opacity = "0"
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand("copy")
+      document.body.removeChild(ta)
+      var orig = el.textContent
+      el.textContent = "Copied!"
+      setTimeout(function() { el.textContent = orig }, 1000)
     })
   })
 }

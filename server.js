@@ -15,7 +15,17 @@ const PORT = parseInt(process.env.PORT, 10) || 3848
 const cache = new Cache()
 
 const SUBGRAPH_TTL = 5 * 60 * 1000  // 5 min
-const BS_TTL = 60 * 1000             // 1 min
+const BS_TTL = 5 * 60 * 1000          // 5 min (SP logs — historical queries over hours, no need for 1 min)
+const DEALBOT_TTL = 5 * 60 * 1000    // 5 min (dealbot tests run every ~45 min)
+
+function shouldRefresh(req) {
+  return req.query.refresh === "1"
+}
+
+function getCached(req, key) {
+  if (shouldRefresh(req)) return null
+  return cache.get(key)
+}
 
 app.use(express.static(path.join(__dirname, "public")))
 
@@ -47,7 +57,7 @@ app.get("/api/network/global", async (req, res) => {
   const network = parseNetwork(req)
   const endpoints = getEndpoints(network)
   const cacheKey = `network:global:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -88,7 +98,7 @@ app.get("/api/network/overview", async (req, res) => {
   const endpoints = getEndpoints(network)
   const CLIENT_IDS = getClientIds(network)
   const cacheKey = `network:overview:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -256,68 +266,62 @@ app.get("/api/sp/:id/proving", async (req, res) => {
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const cacheKey = `sp:${sp.id}:proving:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
-    const data = await gqlFetch(endpoints.pdpScan, `{
-      provider(id: "${addr}") {
-        totalProofSets
-        totalRoots
-        totalDataSize
-        totalFaultedPeriods
-        totalProvingPeriods
-        totalFaultedRoots
-        createdAt
-      }
-      dataSets(first: 100, where: {owner: "${addr}"}, orderBy: id, orderDirection: desc) {
-        id
-        setId
-        leafCount
-        totalRoots
-        totalDataSize
-        isActive
-        lastProvenEpoch
-        nextChallengeEpoch
-        nextDeadline
-        totalFaultedRoots
-        totalFaultedPeriods
-        createdAt
-      }
-      weeklyProviderActivities(first: 20, where: {provider: "${addr}"}, orderBy: id, orderDirection: desc) {
-        id
-        totalProofs
-        totalRootsProved
-        totalFaultedRoots
-        totalFaultedPeriods
-        totalRootsAdded
-        totalDataSizeAdded
-        totalProofSetsCreated
-      }
-    }`)
+    const [providerData, dataSets, weeklyData] = await Promise.all([
+      gqlFetch(endpoints.pdpScan, `{
+        provider(id: "${addr}") {
+          totalProofSets
+          totalRoots
+          totalDataSize
+          totalFaultedPeriods
+          totalProvingPeriods
+          totalFaultedRoots
+          createdAt
+        }
+      }`),
 
-    // Set status from PDP Scan isActive
-    for (const ds of (data.dataSets || [])) {
-      ds.status = ds.isActive ? "Active" : "Inactive"
+      gqlPaginate(endpoints.pdpScan, "dataSets", `
+        id setId leafCount totalRoots totalDataSize isActive
+        lastProvenEpoch nextChallengeEpoch nextDeadline
+        totalFaultedRoots totalFaultedPeriods createdAt
+      `, `owner: "${addr}"`, "setId"),
+
+      gqlFetch(endpoints.pdpScan, `{
+        weeklyProviderActivities(first: 20, where: {provider: "${addr}"}, orderBy: id, orderDirection: desc) {
+          id
+          totalProofs
+          totalRootsProved
+          totalFaultedRoots
+          totalFaultedPeriods
+          totalRootsAdded
+          totalDataSizeAdded
+          totalProofSetsCreated
+        }
+      }`),
+    ])
+
+    const data = {
+      provider: providerData.provider,
+      dataSets: dataSets.reverse(),
+      weeklyProviderActivities: weeklyData.weeklyProviderActivities || [],
     }
 
-    // Fetch faults from PDP Scan faultRecords
-    const faults = await gqlPaginate(endpoints.pdpScan, "faultRecords", `
-      id
-      periodsFaulted
-      deadline
-      createdAt
-      blockNumber
-      dataSetId
-      proofSet { setId }
-    `, `proofSet_: {owner: "${addr}"}`, "createdAt").catch(() => [])
+    // Determine status: PDP Scan isActive is always true, so use totalRoots/totalDataSize as heuristic
+    for (const ds of (data.dataSets || [])) {
+      const hasData = Number(ds.totalRoots || 0) > 0 || ds.totalDataSize !== "0"
+      ds.status = hasData ? "Active" : "Terminated"
+    }
 
+    // Fault data comes from DataSet.totalFaultedPeriods and WeeklyProviderActivity.totalFaultedPeriods
+    // (FaultRecord entity is empty on both networks — PDP Scan website uses these embedded fields)
     const result = {
       provider: data.provider,
       dataSets: data.dataSets || [],
       weeklyActivity: data.weeklyProviderActivities || [],
-      faults: faults.reverse(),
     }
 
     cache.set(cacheKey, result, SUBGRAPH_TTL)
@@ -338,31 +342,25 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
   if (!/^\d+$/.test(setId)) return res.status(400).json({ error: "Invalid setId" })
 
   const cacheKey = `sp:${sp.id}:dataset:${setId}:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
-    const [pdpData, faults] = await Promise.all([
-      gqlFetch(endpoints.pdpScan, `{
-        dataSets(first: 1, where: {setId: "${setId}", owner: "${addr}"}) {
-          setId leafCount challengeRange isActive
-          lastProvenEpoch nextChallengeEpoch nextDeadline firstDeadline
-          maxProvingPeriod challengeWindowSize currentDeadlineCount provenThisPeriod
-          totalRoots nextPieceId totalDataSize totalProofs totalProvedRoots
-          totalFeePaid totalFaultedPeriods totalFaultedRoots
-          totalTransactions totalEventLogs createdAt updatedAt blockNumber
-        }
-      }`).then(d => d.dataSets?.[0] || null).catch(() => null),
-
-      gqlPaginate(endpoints.pdpScan, "faultRecords", `
-        id periodsFaulted deadline createdAt blockNumber
-      `, `proofSet: "${setId}"`, "createdAt").catch(() => []),
-    ])
+    const pdpData = await gqlFetch(endpoints.pdpScan, `{
+      dataSets(first: 1, where: {setId: "${setId}", owner: "${addr}"}) {
+        setId leafCount challengeRange isActive
+        lastProvenEpoch nextChallengeEpoch nextDeadline firstDeadline
+        maxProvingPeriod challengeWindowSize currentDeadlineCount provenThisPeriod
+        totalRoots nextPieceId totalDataSize totalProofs totalProvedRoots
+        totalFeePaid totalFaultedPeriods totalFaultedRoots
+        totalTransactions totalEventLogs createdAt updatedAt blockNumber
+      }
+    }`).then(d => d.dataSets?.[0] || null).catch(() => null)
 
     if (!pdpData) return res.status(404).json({ error: "Dataset not found" })
 
-    const result = { pdp: pdpData, fwss: null, faults }
+    const result = { pdp: pdpData, fwss: null }
     cache.set(cacheKey, result, SUBGRAPH_TTL)
     res.json(result)
   } catch (err) {
@@ -379,7 +377,7 @@ app.get("/api/sp/:id/revenue", async (req, res) => {
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const cacheKey = `sp:${sp.id}:revenue:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -417,7 +415,7 @@ app.get("/api/sp/:id/economics", async (req, res) => {
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const cacheKey = `sp:${sp.id}:economics:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -493,7 +491,7 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
   if (!/^\d+$/.test(railId)) return res.status(400).json({ error: "Invalid railId" })
 
   const cacheKey = `sp:${sp.id}:rail:${railId}:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -542,141 +540,6 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
   }
 })
 
-// GET /api/sp/:id/performance/timeline?hours=N — success % over time
-app.get("/api/sp/:id/performance/timeline", async (req, res) => {
-  const network = parseNetwork(req)
-  const DEALBOT_METRICS = getDealbotMetrics(network)
-  const sp = getSP(req.params.id, network)
-  if (!sp) return res.status(404).json({ error: "Unknown SP" })
-
-  const hours = validateHours(req.query.hours)
-  const bucket = timeBucket(hours)
-  const cacheKey = `sp:${sp.id}:perf-timeline:${hours}:${network}`
-  const cached = cache.get(cacheKey)
-  if (cached) return res.json(cached)
-
-  const networkFilter = network === "mainnet"
-    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
-    : ""
-
-  try {
-    const sql = `
-      WITH storage_raw AS (
-        SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
-          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
-            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
-          avgMerge(value_avg) AS inner_value
-        FROM ${DEALBOT_METRICS}
-        WHERE name = 'dataStorageStatus'
-          AND dt > now() - INTERVAL ${hours} HOUR
-          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
-          AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-          ${networkFilter}
-        GROUP BY time, time_bucket, status, series_id
-      ),
-      storage_values AS (
-        SELECT time, time_bucket, status, sum(inner_value) AS value
-        FROM storage_raw GROUP BY time, time_bucket, status
-      ),
-      storage_deltas AS (
-        SELECT time_bucket, status,
-          if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
-        FROM (
-          SELECT time, time_bucket, status, value,
-            lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
-          FROM storage_values
-        )
-      ),
-      ret_raw AS (
-        SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
-          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
-            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
-          avgMerge(value_avg) AS inner_value
-        FROM ${DEALBOT_METRICS}
-        WHERE name = 'retrievalStatus'
-          AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
-          AND dt > now() - INTERVAL ${hours} HOUR
-          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
-          AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-          ${networkFilter}
-        GROUP BY time, time_bucket, status, series_id
-      ),
-      ret_values AS (
-        SELECT time, time_bucket, status, sum(inner_value) AS value
-        FROM ret_raw GROUP BY time, time_bucket, status
-      ),
-      ret_deltas AS (
-        SELECT time_bucket, status,
-          if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
-        FROM (
-          SELECT time, time_bucket, status, value,
-            lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
-          FROM ret_values
-        )
-      ),
-      combined AS (
-        SELECT time_bucket, 'dataStorage' AS checkType, status,  delta FROM storage_deltas
-        UNION ALL
-        SELECT time_bucket, 'retrieval' AS checkType, status, delta FROM ret_deltas
-      )
-      SELECT time_bucket AS time, checkType,
-        sumIf(delta, status = 'success') AS success,
-        sumIf(delta, status = 'failure') AS failed
-      FROM combined
-      GROUP BY time_bucket, checkType
-      ORDER BY time_bucket ASC
-      FORMAT JSONEachRow`
-
-    const rows = await queryDealbot(sql)
-    cache.set(cacheKey, rows, BS_TTL)
-    res.json(rows)
-  } catch (err) {
-    console.error(`sp/${sp.id}/performance/timeline error:`, err.message)
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// GET /api/sp/:id/performance/latency?hours=N — latency metrics over time
-app.get("/api/sp/:id/performance/latency", async (req, res) => {
-  const network = parseNetwork(req)
-  const DEALBOT_METRICS = getDealbotMetrics(network)
-  const sp = getSP(req.params.id, network)
-  if (!sp) return res.status(404).json({ error: "Unknown SP" })
-
-  const hours = validateHours(req.query.hours)
-  const bucket = timeBucket(hours)
-  const cacheKey = `sp:${sp.id}:perf-latency:${hours}:${network}`
-  const cached = cache.get(cacheKey)
-  if (cached) return res.json(cached)
-
-  const networkFilter = network === "mainnet"
-    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
-    : ""
-
-  try {
-    const sql = `
-      SELECT
-        ${bucket} AS time,
-        replace(name, '_sum', '') AS metric,
-        avgMerge(value_avg) AS sum_val
-      FROM ${DEALBOT_METRICS}
-      WHERE dt > now() - INTERVAL ${hours} HOUR
-        AND name IN ('retrievalCheckMs_sum', 'ipfsRetrievalFirstByteMs_sum', 'ipniVerifyMs_sum')
-        AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-        ${networkFilter}
-        AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
-      GROUP BY time, metric
-      ORDER BY time ASC
-      FORMAT JSONEachRow`
-
-    const rows = await queryDealbot(sql)
-    cache.set(cacheKey, rows, BS_TTL)
-    res.json(rows)
-  } catch (err) {
-    console.error(`sp/${sp.id}/performance/latency error:`, err.message)
-    res.status(500).json({ error: err.message })
-  }
-})
 
 // Dealbot counter delta SQL — matches Better Stack dashboard pattern exactly:
 // 1. avgMerge(value_avg) grouped by series_id to get per-pod values
@@ -726,7 +589,7 @@ app.get("/api/network/performance", async (req, res) => {
   const network = parseNetwork(req)
   const DEALBOT_METRICS = getDealbotMetrics(network)
   const cacheKey = `network:performance:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   const networkFilter = network === "mainnet"
@@ -789,7 +652,7 @@ app.get("/api/network/performance", async (req, res) => {
       else if (r.value === "failure") byProvider[pid][r.checkType].failed += r.cnt
     }
 
-    cache.set(cacheKey, byProvider, BS_TTL)
+    cache.set(cacheKey, byProvider, DEALBOT_TTL)
     res.json(byProvider)
   } catch (err) {
     console.error("network/performance error:", err.message)
@@ -806,7 +669,7 @@ app.get("/api/sp/:id/performance", async (req, res) => {
 
   const hours = validateHours(req.query.hours)
   const cacheKey = `sp:${sp.id}:performance:${hours}:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   const networkFilterClause = network === "mainnet"
@@ -841,10 +704,97 @@ app.get("/api/sp/:id/performance", async (req, res) => {
       ORDER BY name
       FORMAT JSONEachRow`
 
-    const [storageCounters, retrievalCounters, timingRaw] = await Promise.all([
+    const bucket = timeBucket(hours)
+    const networkFilter = networkFilterClause
+
+    // Timeline SQL (success/fail over time)
+    const timelineSql = `
+      WITH storage_raw AS (
+        SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
+          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
+            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+          avgMerge(value_avg) AS inner_value
+        FROM ${DEALBOT_METRICS}
+        WHERE name = 'dataStorageStatus'
+          AND dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          AND ${provFilter}
+        GROUP BY time, time_bucket, status, series_id
+      ),
+      storage_values AS (
+        SELECT time, time_bucket, status, sum(inner_value) AS value
+        FROM storage_raw GROUP BY time, time_bucket, status
+      ),
+      storage_deltas AS (
+        SELECT time_bucket, status,
+          if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
+        FROM (
+          SELECT time, time_bucket, status, value,
+            lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
+          FROM storage_values
+        )
+      ),
+      ret_raw AS (
+        SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
+          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
+            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+          avgMerge(value_avg) AS inner_value
+        FROM ${DEALBOT_METRICS}
+        WHERE name = 'retrievalStatus'
+          AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
+          AND dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          AND ${provFilter}
+        GROUP BY time, time_bucket, status, series_id
+      ),
+      ret_values AS (
+        SELECT time, time_bucket, status, sum(inner_value) AS value
+        FROM ret_raw GROUP BY time, time_bucket, status
+      ),
+      ret_deltas AS (
+        SELECT time_bucket, status,
+          if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
+        FROM (
+          SELECT time, time_bucket, status, value,
+            lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
+          FROM ret_values
+        )
+      ),
+      combined AS (
+        SELECT time_bucket, 'dataStorage' AS checkType, status, delta FROM storage_deltas
+        UNION ALL
+        SELECT time_bucket, 'retrieval' AS checkType, status, delta FROM ret_deltas
+      )
+      SELECT time_bucket AS time, checkType,
+        sumIf(delta, status = 'success') AS success,
+        sumIf(delta, status = 'failure') AS failed
+      FROM combined
+      GROUP BY time_bucket, checkType
+      ORDER BY time_bucket ASC
+      FORMAT JSONEachRow`
+
+    // Latency SQL (timing over time)
+    const latencySql = `
+      SELECT
+        ${bucket} AS time,
+        replace(name, '_sum', '') AS metric,
+        avgMerge(value_avg) AS sum_val
+      FROM ${DEALBOT_METRICS}
+      WHERE dt > now() - INTERVAL ${hours} HOUR
+        AND name IN ('retrievalCheckMs_sum', 'ipfsRetrievalFirstByteMs_sum', 'ipniVerifyMs_sum')
+        AND ${provFilter}
+        AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
+      GROUP BY time, metric
+      ORDER BY time ASC
+      FORMAT JSONEachRow`
+
+    // Run all 5 queries in parallel
+    const [storageCounters, retrievalCounters, timingRaw, timeline, latency] = await Promise.all([
       queryDealbot(storageSql),
       queryDealbot(retrievalSql),
       queryDealbot(timingSql),
+      queryDealbot(timelineSql).catch(() => []),
+      queryDealbot(latencySql).catch(() => []),
     ])
 
     // Merge into unified counters array with checkType
@@ -869,8 +819,8 @@ app.get("/api/sp/:id/performance", async (req, res) => {
       }
     }
 
-    const result = { available: true, counters, timing }
-    cache.set(cacheKey, result, BS_TTL)
+    const result = { available: true, counters, timing, timeline, latency }
+    cache.set(cacheKey, result, DEALBOT_TTL)
     res.json(result)
   } catch (err) {
     console.error(`sp/${sp.id}/performance error:`, err.message)
@@ -895,6 +845,10 @@ app.get("/api/sp/:id/logs", async (req, res) => {
   } else if (level && validLevels.has(level)) {
     levelFilter = `AND JSONExtract(raw, 'level', 'Nullable(String)') = '${level}'`
   }
+
+  const cacheKey = `sp:${sp.id}:logs:${hours}:${level || "all"}:${network}`
+  const cached = getCached(req, cacheKey)
+  if (cached) return res.json(cached)
 
   try {
     const sql = `
@@ -929,7 +883,9 @@ app.get("/api/sp/:id/logs", async (req, res) => {
       FORMAT JSONEachRow`
 
     const rows = await queryBetterStack(sql)
-    res.json({ available: true, logs: rows })
+    const result = { available: true, logs: rows }
+    cache.set(cacheKey, result, BS_TTL)
+    res.json(result)
   } catch (err) {
     console.error(`sp/${sp.id}/logs error:`, err.message)
     res.status(500).json({ error: err.message })
@@ -945,7 +901,7 @@ app.get("/api/sp/:id/errors", async (req, res) => {
 
   const hours = validateHours(req.query.hours)
   const cacheKey = `sp:${sp.id}:errors:${hours}:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -996,7 +952,7 @@ app.get("/api/sp/:id/patterns", async (req, res) => {
 
   const hours = validateHours(req.query.hours)
   const cacheKey = `sp:${sp.id}:patterns:${hours}:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -1048,7 +1004,7 @@ app.get("/api/sp/:id/timeline", async (req, res) => {
   const hours = validateHours(req.query.hours)
   const bucket = timeBucket(hours)
   const cacheKey = `sp:${sp.id}:timeline:${hours}:${network}`
-  const cached = cache.get(cacheKey)
+  const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
@@ -1086,8 +1042,40 @@ app.get("/api/sp/:id/timeline", async (req, res) => {
   }
 })
 
+// Background pre-warming — hit local endpoints to populate cache
+async function prewarm(network) {
+  const base = `http://localhost:${PORT}`
+  const endpoints = [
+    `/api/network/global?network=${network}`,
+    `/api/network/overview?network=${network}`,
+    `/api/network/performance?network=${network}`,
+  ]
+  for (const ep of endpoints) {
+    try {
+      await fetch(`${base}${ep}`, { signal: AbortSignal.timeout(30000) })
+    } catch {}
+  }
+  console.log(`Prewarm ${network}: done`)
+}
+
+function startPrewarm() {
+  // Initial prewarm after 2s (let server start first)
+  setTimeout(() => {
+    prewarm("mainnet")
+    prewarm("calibration")
+  }, 2000)
+
+  // Repeat every 5 min
+  const interval = setInterval(() => {
+    prewarm("mainnet")
+    prewarm("calibration")
+  }, 5 * 60 * 1000)
+  interval.unref()
+}
+
 // Start server
 startLivenessProbes()
+startPrewarm()
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`PDP SP Dashboard running on http://0.0.0.0:${PORT}`)
 })

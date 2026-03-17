@@ -898,6 +898,16 @@ td.level-info { color: var(--accent); }
   letter-spacing: 0.04em;
 }
 
+.sp-addr {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.4;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.sp-addr:hover { opacity: 0.8; }
+
 .sp-home-metrics {
   padding: 10px 16px 6px;
 }

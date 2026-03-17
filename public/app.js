@@ -1,10 +1,11 @@
 // Shared state and helpers
-var selectedHours = 72
-var selectedPerfHours = 72
+var selectedHours = 24
+var selectedPerfHours = 24
 var currentSP = null
 var currentTab = "overview"
 var spConfig = []
 var selectedNetwork = "mainnet"
+var forceRefresh = false
 
 function getHours() {
   return selectedHours
@@ -12,7 +13,9 @@ function getHours() {
 
 function apiUrl(path) {
   var sep = path.indexOf("?") === -1 ? "?" : "&"
-  return path + sep + "network=" + selectedNetwork
+  var url = path + sep + "network=" + selectedNetwork
+  if (forceRefresh) url += "&refresh=1"
+  return url
 }
 
 async function fetchJSON(url) {
@@ -167,10 +170,8 @@ function initRouter() {
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
     if (currentSP && currentSP.hasLogs) {
-      loadSPTimeline(currentSP)
-      loadSPErrors(currentSP)
-      loadSPPatterns(currentSP)
-      loadSPLogs(currentSP)
+      spDataCache.logs = false
+      Promise.all([loadSPTimeline(currentSP), loadSPErrors(currentSP), loadSPPatterns(currentSP), loadSPLogs(currentSP)]).catch(function() {})
     }
   })
 
@@ -183,7 +184,7 @@ function initRouter() {
     var btns = document.querySelectorAll("#perf-time-range-btns button")
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
-    if (currentSP) loadPerformance(currentSP)
+    if (currentSP) { spDataCache.performance = null; loadPerformance(currentSP) }
   })
 
   // Network switcher
@@ -202,6 +203,13 @@ function initRouter() {
 
   // Refresh button
   document.getElementById("refresh-btn").addEventListener("click", refresh)
+
+  // Escape key closes modals
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".modal-overlay").forEach(function(m) { m.style.display = "none" })
+    }
+  })
 
   // Back button
   document.getElementById("back-btn").addEventListener("click", function() {
@@ -242,8 +250,9 @@ function showTab(tabName) {
 
   currentTab = tabName
 
-  // Redraw charts after tab becomes visible (canvas needs dimensions)
+  // Lazy-load tab data on first click, then redraw charts
   if (currentSP) {
+    loadTabData(tabName, currentSP)
     if (tabName === "performance") {
       loadPerfTimeline(currentSP)
       loadPerfLatency(currentSP)
@@ -270,19 +279,20 @@ function showTab(tabName) {
       }
     } else if (tabName === "logs") {
       loadSPTimeline(currentSP)
-    } else if (tabName === "economics") {
-      loadRevenue(currentSP)
     }
   }
 }
 
-function refresh() {
+async function refresh() {
+  forceRefresh = true
+  spDataCache = {}
   var route = getRoute()
   if (route.page === "detail" && currentSP) {
-    loadSPDetail(currentSP)
+    await loadSPDetail(currentSP)
   } else {
-    loadOverview()
+    await loadOverview()
   }
+  forceRefresh = false
 }
 
 // Canvas helpers
