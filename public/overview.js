@@ -88,6 +88,7 @@ function renderSPGrid(container, providers, perfData) {
         '<span class="sp-home-name">' + escapeHtml(sp.name) + '</span>' +
       '</div>' +
       '<span class="sp-id">ID ' + sp.id + '</span>' +
+      '<span class="sp-period">24h</span>' +
     '</div>'
 
     // Performance only

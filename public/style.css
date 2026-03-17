@@ -1003,6 +1003,14 @@ td.level-info { color: var(--accent); }
   text-overflow: ellipsis;
 }
 
+.sp-period {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  letter-spacing: 0.04em;
+}
+
 .sp-home-metrics {
   padding: 10px 16px 6px;
 }

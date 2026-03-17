@@ -96,7 +96,7 @@ function getRoute() {
   if (hash.startsWith("#sp/")) {
     var parts = hash.slice(4).split("/")
     var id = parseInt(parts[0], 10)
-    var tab = parts[1] || "overview"
+    var tab = parts[1] || "performance"
     return { page: "detail", spId: id, tab: tab }
   }
   return { page: "overview" }
