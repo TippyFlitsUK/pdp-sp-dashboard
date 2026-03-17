@@ -21,9 +21,12 @@ Team: FOC WG (t468215). See memory file `reference_betterstack_sources.md` for f
 - Fields: providerAddress, providerId, dealId, pieceCid, ipfsRootCID, event, durationMs, TTFB
 
 **Dealbot Metrics** (Prometheus, sources 1726029 + 1701980):
-- Infra Staging: `remote(t468215_infra_staging_2_metrics)`
-- Dealbot staging: `remote(t468215_dealbot_staging_2_metrics)`
-- Key metrics: deals_created_total, deal_creation_duration_seconds, retrieval_latency_seconds, retrieval_ttfb_seconds, wallet_balance
+- **Mainnet**: `remote(t468215_infra_prod_metrics)` via dealbot host (us-east-9)
+- **Calibnet**: `remote(t468215_infra_staging_2_metrics)` via dealbot host
+- Metric name: `retrievalStatus` with tags: `checkType` (dataStorage/retrieval/dataRetention), `value` (success/failure.*), `providerId`, `network` (mainnet/calibration)
+- Timing: `retrievalCheckMs`, `ipfsRetrievalFirstByteMs`, `ipfsRetrievalLastByteMs`, `ipfsRetrievalThroughputBps`, `ipniVerifyMs`
+- Timing averages: use `_sum` / `_count` gauge pairs (avgMerge returns null for histograms)
+- Old metric names (deals_created_total, retrievals_tested_total etc) stopped 2026-03-03 after dealbot upgrade
 
 ### 2. PDP Scan Subgraph (On-Chain Proofs)
 - Endpoint: `https://api.goldsky.com/api/public/project_cmdfaaxeuz6us01u359yjdctw/subgraphs/pdp-explorer/mainnet311b/gn`
@@ -70,7 +73,16 @@ Team: FOC WG (t468215). See memory file `reference_betterstack_sources.md` for f
 - `BETTERSTACK_HOST` - SQL API hostname
 - `BETTERSTACK_USERNAME` - ClickHouse SQL username
 - `BETTERSTACK_PASSWORD` - ClickHouse SQL password
+- `BETTERSTACK_DEALBOT_HOST` - Dealbot metrics SQL hostname (us-east-9)
+- `BETTERSTACK_DEALBOT_USERNAME` - Dealbot metrics SQL username
+- `BETTERSTACK_DEALBOT_PASSWORD` - Dealbot metrics SQL password
 - `PORT` - HTTP port
+
+## Deployment
+- Host: 77.42.75.71, PM2 process `pdp-sp-dashboard`, port 3848
+- Domain: spdash.ezpdpz.net (A record, no Cloudflare)
+- nginx reverse proxy routes by hostname on port 80
+- Deploy: `rsync -avz --exclude='node_modules' --exclude='.env' . 77.42.75.71:~/pdp-sp-dashboard/ && ssh 77.42.75.71 'pm2 restart pdp-sp-dashboard'`
 
 ## Critical Rules
 
@@ -96,3 +108,22 @@ Team: FOC WG (t468215). See memory file `reference_betterstack_sources.md` for f
 - Pagination: `first: 1000, skip: N` (max 1000 per query)
 - All BigInt fields returned as strings
 - ALWAYS introspect schema with `__type(name: "EntityName") { fields { name } }` before querying
+
+### Subgraph Field Gotchas (verified by introspection)
+- NetworkMetric: `totalProofs` (not `totalProofsSubmitted`)
+- GlobalMetric (FWSS): `totalStorageBytes` (not `totalSize`)
+- FaultRecord: no `rootsFaulted` or `blockTimestamp` - has `periodsFaulted`, `createdAt`
+- Settlement: `totalNetPayeeAmount` (not `netPayeeAmount`), `createdAt` (not `blockTimestamp`)
+- Provider (PDP Scan): `id` is lowercase address, not numeric ID
+- DataSet (PDP Scan): filter by `owner` address, not `provider`
+- FWSS `dataSetId` matches PDP Scan `setId` (same proof set ID) -- join works correctly
+- FWSS has `status` (Active/Terminated) that PDP Scan lacks (PDP Scan `isActive` is always true)
+
+### Frontend Rules
+- `.panel > div` CSS forces `flex-direction: column` -- add `:not()` exclusions for grids/flex containers inside panels
+- Static file changes need cache-busting (`?v=N` on CSS/JS links in index.html) or browser hard refresh
+- Tab content is `display:none` when hidden -- canvas charts need redraw on tab switch (getBoundingClientRect returns 0)
+- `summaryGrid()` is the standard card layout -- use it everywhere for consistency
+- Each tab follows: section heading -> summaryGrid cards -> chart -> table pattern
+- Modals reuse `.dataset-detail-grid` + `.dd-section` layout
+- `wireSortable(tableId)` in app.js for click-sortable table columns
