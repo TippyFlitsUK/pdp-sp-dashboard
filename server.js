@@ -51,49 +51,27 @@ app.get("/api/network/global", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const promises = [
-      gqlFetch(endpoints.pdpScan, `{
-        networkMetrics(first: 1) {
-          totalProviders
-          totalProofSets
-          totalRoots
-          totalDataSize
-          totalProofs
-          totalFaultedPeriods
-        }
-      }`),
-    ]
-
-    // FWSS may be null on calibnet
-    if (endpoints.fwss) {
-      promises.push(
-        gqlFetch(endpoints.fwss, `{
-          globalMetrics(first: 1) {
-            totalDataSets
-            totalPieces
-            totalStorageBytes
-          }
-        }`)
-      )
-    } else {
-      promises.push(Promise.resolve({ globalMetrics: [] }))
-    }
-
-    const [pdpData, fwssData] = await Promise.all(promises)
+    const pdpData = await gqlFetch(endpoints.pdpScan, `{
+      networkMetrics(first: 1) {
+        totalProviders
+        totalProofSets
+        totalRoots
+        totalDataSize
+        totalProofs
+        totalFaultedPeriods
+      }
+    }`)
 
     const pdp = pdpData.networkMetrics?.[0] || {}
-    const fwss = fwssData.globalMetrics?.[0] || {}
 
     const result = {
       providers: Number(pdp.totalProviders || 0),
       proofSets: Number(pdp.totalProofSets || 0),
       roots: Number(pdp.totalRoots || 0),
       dataSize: pdp.totalDataSize || "0",
+      storageSize: pdp.totalDataSize || "0",
       proofsSubmitted: Number(pdp.totalProofs || 0),
       faultedPeriods: Number(pdp.totalFaultedPeriods || 0),
-      datasets: Number(fwss.totalDataSets || 0),
-      pieces: Number(fwss.totalPieces || 0),
-      storageSize: fwss.totalStorageBytes || "0",
     }
 
     cache.set(cacheKey, result, SUBGRAPH_TTL)
@@ -115,7 +93,7 @@ app.get("/api/network/overview", async (req, res) => {
 
   try {
     // Parallel fetch all data sources
-    const [pdpProviders, fwssDatasets, filpayRails, bsOverview, bsVersions] = await Promise.all([
+    const [pdpProviders, filpayRails, bsOverview, bsVersions] = await Promise.all([
       // PDP Scan providers
       gqlFetch(endpoints.pdpScan, `{
         providers(first: 100) {
@@ -128,20 +106,6 @@ app.get("/api/network/overview", async (req, res) => {
           totalProvingPeriods
         }
       }`).then(d => d.providers || []).catch(() => []),
-
-      // FWSS datasets aggregated per provider
-      endpoints.fwss
-        ? gqlPaginate(endpoints.fwss, "dataSets", `
-            dataSetId
-            providerId
-            payer
-            payee
-            pdpRailId
-            totalPieces
-            totalSize
-            status
-          `).catch(() => [])
-        : Promise.resolve([]),
 
       // FilecoinPay active rails
       gqlPaginate(endpoints.filecoinPay, "rails", `
@@ -217,16 +181,6 @@ app.get("/api/network/overview", async (req, res) => {
       }
     }
 
-    // Aggregate FWSS datasets per provider
-    const fwssByProvider = {}
-    for (const ds of fwssDatasets) {
-      const pid = ds.providerId
-      if (!fwssByProvider[pid]) fwssByProvider[pid] = { datasets: 0, pieces: 0, totalSize: BigInt(0) }
-      fwssByProvider[pid].datasets++
-      fwssByProvider[pid].pieces += Number(ds.totalPieces || 0)
-      fwssByProvider[pid].totalSize += BigInt(ds.totalSize || 0)
-    }
-
     // Map FilecoinPay rails by payee address (lowercase)
     const railsByPayee = {}
     for (const r of filpayRails) {
@@ -263,7 +217,6 @@ app.get("/api/network/overview", async (req, res) => {
     const result = getAllSPs(network).map(sp => {
       const addr = sp.address.toLowerCase()
       const pdp = providerMap[addr]?.pdp || null
-      const fwss = fwssByProvider[String(sp.id)]
       const rails = railsByPayee[addr]
       const bs = sp.hasLogs ? bsByClient[sp.clientId] || null : null
       const version = sp.hasLogs ? versionByClient[sp.clientId] || null : null
@@ -275,11 +228,6 @@ app.get("/api/network/overview", async (req, res) => {
         hasLogs: sp.hasLogs,
         liveness: liveness[sp.id] || null,
         pdp,
-        fwss: fwss ? {
-          datasets: fwss.datasets,
-          pieces: fwss.pieces,
-          totalSize: fwss.totalSize.toString(),
-        } : null,
         economics: rails ? {
           activeRails: rails.activeRails,
           totalRate: rails.totalRate.toString(),
@@ -349,38 +297,21 @@ app.get("/api/sp/:id/proving", async (req, res) => {
       }
     }`)
 
-    // Fetch FWSS dataset status (has Terminated status that PDP Scan doesn't)
-    const fwssDatasets = endpoints.fwss
-      ? await gqlPaginate(endpoints.fwss, "dataSets", `
-          dataSetId
-          status
-          pdpRailId
-        `, `providerId: "${sp.id}"`).catch(() => [])
-      : []
-
-    // Merge FWSS status into PDP Scan datasets (dataSetId matches setId)
-    const fwssStatusMap = {}
-    for (const fd of fwssDatasets) {
-      fwssStatusMap[fd.dataSetId] = { status: fd.status, railId: fd.pdpRailId }
-    }
+    // Set status from PDP Scan isActive
     for (const ds of (data.dataSets || [])) {
-      const fwss = fwssStatusMap[ds.setId] || {}
-      ds.status = fwss.status || (ds.isActive ? "Active" : "Inactive")
-      ds.railId = fwss.railId || null
+      ds.status = ds.isActive ? "Active" : "Inactive"
     }
 
-    // Fetch faults from FWSS subgraph
-    const faults = endpoints.fwss
-      ? await gqlPaginate(endpoints.fwss, "faults", `
-          id
-          periodsFaulted
-          deadline
-          timestamp
-          blockNumber
-          txHash
-          dataSet { dataSetId }
-        `, `dataSet_: {providerId: "${sp.id}"}`, "timestamp").catch(() => [])
-      : []
+    // Fetch faults from PDP Scan faultRecords
+    const faults = await gqlPaginate(endpoints.pdpScan, "faultRecords", `
+      id
+      periodsFaulted
+      deadline
+      createdAt
+      blockNumber
+      dataSetId
+      proofSet { setId }
+    `, `proofSet_: {owner: "${addr}"}`, "createdAt").catch(() => [])
 
     const result = {
       provider: data.provider,
@@ -397,7 +328,7 @@ app.get("/api/sp/:id/proving", async (req, res) => {
   }
 })
 
-// GET /api/sp/:id/dataset/:setId — single dataset detail from PDP Scan + FWSS
+// GET /api/sp/:id/dataset/:setId — single dataset detail from PDP Scan
 app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
   const network = parseNetwork(req)
   const endpoints = getEndpoints(network)
@@ -412,7 +343,7 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
 
   try {
     const addr = sp.address.toLowerCase()
-    const [pdpData, fwssData, fwssFaults] = await Promise.all([
+    const [pdpData, faults] = await Promise.all([
       gqlFetch(endpoints.pdpScan, `{
         dataSets(first: 1, where: {setId: "${setId}", owner: "${addr}"}) {
           setId leafCount challengeRange isActive
@@ -424,27 +355,14 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
         }
       }`).then(d => d.dataSets?.[0] || null).catch(() => null),
 
-      endpoints.fwss
-        ? gqlFetch(endpoints.fwss, `{
-            dataSets(first: 1, where: {dataSetId: "${setId}", providerId: "${sp.id}"}) {
-              dataSetId providerId payer payee
-              pdpRailId cacheMissRailId cdnRailId
-              totalPieces totalSize withCDN withIPFSIndexing
-              status createdAt createdAtBlock createdAtTxHash
-            }
-          }`).then(d => d.dataSets?.[0] || null).catch(() => null)
-        : Promise.resolve(null),
-
-      endpoints.fwss
-        ? gqlPaginate(endpoints.fwss, "faults", `
-            id periodsFaulted deadline timestamp txHash
-          `, `dataSet: "${setId}"`, "timestamp").catch(() => [])
-        : Promise.resolve([]),
+      gqlPaginate(endpoints.pdpScan, "faultRecords", `
+        id periodsFaulted deadline createdAt blockNumber
+      `, `proofSet: "${setId}"`, "createdAt").catch(() => []),
     ])
 
-    if (!pdpData && !fwssData) return res.status(404).json({ error: "Dataset not found" })
+    if (!pdpData) return res.status(404).json({ error: "Dataset not found" })
 
-    const result = { pdp: pdpData, fwss: fwssData, faults: fwssFaults }
+    const result = { pdp: pdpData, fwss: null, faults }
     cache.set(cacheKey, result, SUBGRAPH_TTL)
     res.json(result)
   } catch (err) {
@@ -615,19 +533,7 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
     const rail = data.rails?.[0]
     if (!rail) return res.status(404).json({ error: "Rail not found" })
 
-    // Find linked FWSS dataset via pdpRailId
-    const fwssDataset = endpoints.fwss
-      ? await gqlFetch(endpoints.fwss, `{
-          dataSets(first: 1, where: {pdpRailId: "${railId}", providerId: "${sp.id}"}) {
-            dataSetId
-            status
-            totalPieces
-            totalSize
-          }
-        }`).then(d => d.dataSets?.[0] || null).catch(() => null)
-      : null
-
-    const result = { rail, dataset: fwssDataset }
+    const result = { rail, dataset: null }
     cache.set(cacheKey, result, SUBGRAPH_TTL)
     res.json(result)
   } catch (err) {

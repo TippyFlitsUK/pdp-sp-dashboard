@@ -90,7 +90,7 @@ function showFaultsModal(period) {
   if (period === "7d") {
     title = "Faulted Periods (Last 7 Days)"
     var sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 86400
-    faults = faults.filter(function(f) { return Number(f.timestamp) >= sevenDaysAgo })
+    faults = faults.filter(function(f) { return Number(f.createdAt) >= sevenDaysAgo })
   }
 
   var body = document.getElementById("faults-modal-body")
@@ -99,17 +99,17 @@ function showFaultsModal(period) {
   if (!faults.length) {
     body.innerHTML = '<div class="no-data">No faults recorded</div>'
   } else {
-    var html = '<table style="width:100%"><thead><tr><th>Data Set</th><th>Periods</th><th>Deadline</th><th>Time</th><th>Tx</th></tr></thead><tbody>'
+    var html = '<table style="width:100%"><thead><tr><th>Data Set</th><th>Periods</th><th>Deadline</th><th>Time</th><th>Block</th></tr></thead><tbody>'
     for (var i = 0; i < faults.length; i++) {
       var f = faults[i]
-      var time = f.timestamp ? formatTime(new Date(Number(f.timestamp) * 1000).toISOString()) : '-'
-      var txLink = f.txHash ? '<a href="https://filfox.info/en/tx/' + f.txHash + '" target="_blank" style="color:inherit;text-decoration:none">' + f.txHash + '</a>' : '-'
+      var time = f.createdAt ? formatTime(new Date(Number(f.createdAt) * 1000).toISOString()) : '-'
+      var block = f.blockNumber ? Number(f.blockNumber).toLocaleString() : '-'
       html += '<tr>' +
-        '<td>' + (f.dataSet ? f.dataSet.dataSetId : '-') + '</td>' +
+        '<td>' + (f.dataSetId || (f.proofSet ? f.proofSet.setId : '-')) + '</td>' +
         '<td class="level-error">' + f.periodsFaulted + '</td>' +
         '<td>' + Number(f.deadline || 0).toLocaleString() + '</td>' +
         '<td>' + time + '</td>' +
-        '<td>' + txLink + '</td>' +
+        '<td>' + block + '</td>' +
       '</tr>'
     }
     html += '</tbody></table>'
@@ -129,11 +129,10 @@ async function showDatasetModal(spId, setId) {
   try {
     var data = await fetchJSON(apiUrl("/api/sp/" + spId + "/dataset/" + setId))
     var pdp = data.pdp || {}
-    var fwss = data.fwss || {}
     var faults = data.faults || []
 
-    var status = fwss.status || (pdp.isActive ? "Active" : "Inactive")
-    var statusClass = status === "Active" ? "active" : "terminated"
+    var status = pdp.isActive ? "Active" : "Inactive"
+    var statusClass = status === "Active" ? "active" : "inactive"
 
     var created = pdp.createdAt ? formatTime(new Date(Number(pdp.createdAt) * 1000).toISOString()) : '-'
     var updated = pdp.updatedAt ? formatTime(new Date(Number(pdp.updatedAt) * 1000).toISOString()) : '-'
@@ -145,14 +144,8 @@ async function showDatasetModal(spId, setId) {
       '<h4>Identity & Status</h4>' +
       '<div class="dd-row"><span>Status</span><span class="badge ' + statusClass + '">' + status + '</span></div>' +
       '<div class="dd-row"><span>Data Set ID</span><span>' + setId + '</span></div>' +
-      (fwss.pdpRailId ? '<div class="dd-row"><span>Pay Rail ID</span><span>' + fwss.pdpRailId + '</span></div>' : '') +
-      (fwss.cacheMissRailId ? '<div class="dd-row"><span>Cache Miss Rail ID</span><span>' + fwss.cacheMissRailId + '</span></div>' : '') +
-      (fwss.cdnRailId ? '<div class="dd-row"><span>CDN Rail ID</span><span>' + fwss.cdnRailId + '</span></div>' : '') +
-      '<div class="dd-row"><span>CDN</span><span>' + (fwss.withCDN ? 'Yes' : 'No') + '</span></div>' +
-      '<div class="dd-row"><span>IPFS Indexing</span><span>' + (fwss.withIPFSIndexing ? 'Yes' : 'No') + '</span></div>' +
       '<div class="dd-row"><span>Created</span><span>' + created + '</span></div>' +
       '<div class="dd-row"><span>Last Updated</span><span>' + updated + '</span></div>' +
-      (fwss.createdAtTxHash ? '<div class="dd-row"><span>Creation Tx</span><span><a href="https://filfox.info/en/tx/' + fwss.createdAtTxHash + '" target="_blank" style="color:var(--accent);font-size:11px">' + fwss.createdAtTxHash.slice(0, 14) + '...</a></span></div>' : '') +
     '</div>'
 
     // Proving
@@ -174,17 +167,16 @@ async function showDatasetModal(spId, setId) {
       '<h4>Faults</h4>' +
       '<div class="dd-row"><span>Faulted Periods</span><span class="' + (Number(pdp.totalFaultedPeriods) > 0 ? 'level-error' : '') + '">' + Number(pdp.totalFaultedPeriods || 0) + '</span></div>'
     if (faults.length > 0) {
-      html += '<table style="margin-top:8px"><thead><tr><th>Periods</th><th>Deadline</th><th>Time</th><th>Tx</th></tr></thead><tbody>'
+      html += '<table style="margin-top:8px"><thead><tr><th>Periods</th><th>Deadline</th><th>Time</th><th>Block</th></tr></thead><tbody>'
       for (var i = 0; i < faults.length; i++) {
         var f = faults[i]
-        var time = f.timestamp ? formatTime(new Date(Number(f.timestamp) * 1000).toISOString()) : '-'
-        var txShort = f.txHash ? f.txHash.slice(0, 10) + '...' : '-'
-        var txLink = f.txHash ? '<a href="https://filfox.info/en/tx/' + f.txHash + '" target="_blank" style="color:var(--accent)">' + txShort + '</a>' : '-'
+        var time = f.createdAt ? formatTime(new Date(Number(f.createdAt) * 1000).toISOString()) : '-'
+        var block = f.blockNumber ? Number(f.blockNumber).toLocaleString() : '-'
         html += '<tr>' +
           '<td class="level-error">' + f.periodsFaulted + '</td>' +
           '<td>' + Number(f.deadline || 0).toLocaleString() + '</td>' +
           '<td>' + time + '</td>' +
-          '<td>' + txLink + '</td>' +
+          '<td>' + block + '</td>' +
         '</tr>'
       }
       html += '</tbody></table>'
@@ -196,14 +188,12 @@ async function showDatasetModal(spId, setId) {
     // Storage & Economics
     html += '<div class="dd-section">' +
       '<h4>Storage & Economics</h4>' +
-      '<div class="dd-row"><span>Total Pieces</span><span>' + Number(pdp.totalRoots || fwss.totalPieces || 0).toLocaleString() + '</span></div>' +
-      '<div class="dd-row"><span>Data Size</span><span>' + formatBytes(pdp.totalDataSize || fwss.totalSize) + '</span></div>' +
+      '<div class="dd-row"><span>Total Pieces</span><span>' + Number(pdp.totalRoots || 0).toLocaleString() + '</span></div>' +
+      '<div class="dd-row"><span>Data Size</span><span>' + formatBytes(pdp.totalDataSize) + '</span></div>' +
       '<div class="dd-row"><span>Leaf Count</span><span>' + Number(pdp.leafCount || 0).toLocaleString() + '</span></div>' +
       '<div class="dd-row"><span>Challenge Range</span><span>' + Number(pdp.challengeRange || 0).toLocaleString() + '</span></div>' +
       '<div class="dd-row"><span>Total Fee Paid</span><span>' + formatWei(pdp.totalFeePaid) + '</span></div>' +
       '<div class="dd-row"><span>Transactions</span><span>' + Number(pdp.totalTransactions || 0).toLocaleString() + '</span></div>' +
-      (fwss.payer ? '<div class="dd-row"><span>Payer</span><span style="font-size:11px">' + escapeHtml(fwss.payer) + '</span></div>' : '') +
-      (fwss.payee ? '<div class="dd-row"><span>Payee</span><span style="font-size:11px">' + escapeHtml(fwss.payee) + '</span></div>' : '') +
     '</div>'
 
     html += '</div>'
@@ -226,7 +216,7 @@ async function loadProving(sp) {
     // Count faults from actual records (same source as modal)
     var allFaults = data.faults || []
     var sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 86400
-    var faults7d = allFaults.filter(function(f) { return Number(f.timestamp) >= sevenDaysAgo })
+    var faults7d = allFaults.filter(function(f) { return Number(f.createdAt) >= sevenDaysAgo })
     var totalFaultPeriods = allFaults.reduce(function(sum, f) { return sum + (f.periodsFaulted || 1) }, 0)
     var faultPeriods7d = faults7d.reduce(function(sum, f) { return sum + (f.periodsFaulted || 1) }, 0)
 
@@ -274,7 +264,6 @@ async function loadProving(sp) {
         '<th class="sortable" data-col="pieces">Pieces</th>' +
         '<th class="sortable" data-col="lastProven">Last Proven Epoch</th>' +
         '<th class="sortable" data-col="createdAt">Created At</th>' +
-        '<th class="sortable" data-col="railId">Rail ID</th>' +
       '</tr></thead><tbody id="datasets-tbody">'
       for (var j = 0; j < data.dataSets.length; j++) {
         var ds = data.dataSets[j]
@@ -286,15 +275,13 @@ async function loadProving(sp) {
           ' data-pieces="' + Number(ds.totalRoots || ds.leafCount || 0) + '"' +
           ' data-lastproven="' + Number(ds.lastProvenEpoch || 0) + '"' +
           ' data-createdat="' + Number(ds.createdAt || 0) + '"' +
-          ' data-railid="' + Number(ds.railId || 0) + '"' +
         '>' +
           '<td>' + (ds.setId || ds.id) + '</td>' +
-          '<td><span class="badge ' + (ds.status === "Active" ? "active" : "terminated") + '">' + escapeHtml(ds.status || "Unknown") + '</span></td>' +
+          '<td><span class="badge ' + (ds.status === "Active" ? "active" : "inactive") + '">' + escapeHtml(ds.status || "Unknown") + '</span></td>' +
           '<td>' + formatBytes(ds.totalDataSize) + '</td>' +
           '<td>' + Number(ds.totalRoots || ds.leafCount || 0).toLocaleString() + '</td>' +
           '<td>' + Number(ds.lastProvenEpoch || 0).toLocaleString() + '</td>' +
           '<td>' + created + '</td>' +
-          '<td>' + (ds.railId || '-') + '</td>' +
         '</tr>'
       }
       html += '</tbody></table></div>'
@@ -311,7 +298,7 @@ async function loadProving(sp) {
     })
 
     // Wire up sortable columns
-    var colMap = { setId: 'setid', status: 'status', dataSize: 'datasize', pieces: 'pieces', lastProven: 'lastproven', createdAt: 'createdat', railId: 'railid' }
+    var colMap = { setId: 'setid', status: 'status', dataSize: 'datasize', pieces: 'pieces', lastProven: 'lastproven', createdAt: 'createdat' }
     document.querySelectorAll('#datasets-table th.sortable').forEach(function(th) {
       th.addEventListener('click', function() {
         var col = colMap[th.dataset.col]

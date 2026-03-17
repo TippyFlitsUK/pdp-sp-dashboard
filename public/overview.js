@@ -43,7 +43,6 @@ function renderSPGrid(container, providers, perfData) {
   for (var i = 0; i < providers.length; i++) {
     var sp = providers[i]
     var pdp = sp.pdp || {}
-    var fwss = sp.fwss || {}
     var econ = sp.economics || {}
     var logs = sp.logHealth || {}
     var hbClass = heartbeatClass(sp.liveness)
