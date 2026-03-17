@@ -56,8 +56,8 @@ function renderSPGrid(container, providers, perfData) {
     var rtTotal = rt.success + rt.failed
     var dsPct = dsTotal > 0 ? ((ds.success / dsTotal) * 100).toFixed(1) : "N/A"
     var rtPct = rtTotal > 0 ? ((rt.success / rtTotal) * 100).toFixed(1) : "N/A"
-    var dsSLA = dsPct !== "N/A" && parseFloat(dsPct) >= 97
-    var rtSLA = rtPct !== "N/A" && parseFloat(rtPct) >= 97
+    var dsSLA = dsPct !== "N/A" && parseFloat(dsPct) >= 97 && dsTotal >= 200
+    var rtSLA = rtPct !== "N/A" && parseFloat(rtPct) >= 97 && rtTotal >= 200
     var allPass = dsSLA && rtSLA
 
     // Card border color based on SLA
@@ -86,7 +86,7 @@ function renderSPGrid(container, providers, perfData) {
       '<div style="display:flex;align-items:center;gap:6px;min-width:0">' +
         '<span class="heartbeat-dot ' + bulletCls + '"></span>' +
         '<span class="sp-home-name">' + escapeHtml(sp.name) + '</span>' +
-        '<span class="sp-period">24h</span>' +
+        '<span class="sp-period">72h</span>' +
       '</div>' +
       '<span class="sp-id">ID ' + sp.id + '</span>' +
     '</div>'

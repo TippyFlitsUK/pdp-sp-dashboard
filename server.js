@@ -760,7 +760,7 @@ function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter) {
     FORMAT JSONEachRow`
 }
 
-// GET /api/network/performance — bulk dealbot performance for all providers (24h)
+// GET /api/network/performance — bulk dealbot performance for all providers (72h for 200-sample SLA)
 app.get("/api/network/performance", async (req, res) => {
   const cacheKey = "network:performance"
   const cached = cache.get(cacheKey)
@@ -780,7 +780,7 @@ app.get("/api/network/performance", async (req, res) => {
             avgMerge(value_avg) AS inner_value
           FROM ${DEALBOT_METRICS}
           WHERE name = '${metricName}'
-            AND dt > now() - INTERVAL 24 HOUR
+            AND dt > now() - INTERVAL 72 HOUR
             AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
             AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
             ${ctFilter}
