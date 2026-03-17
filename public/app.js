@@ -1,6 +1,6 @@
 // Shared state and helpers
-var selectedHours = 24
-var selectedPerfHours = 24
+var selectedHours = 72
+var selectedPerfHours = 72
 var currentSP = null
 var currentTab = "overview"
 var spConfig = []
