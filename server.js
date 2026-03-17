@@ -591,11 +591,11 @@ app.get("/api/sp/:id/performance/timeline", async (req, res) => {
 
   try {
     const sql = `
-      SELECT time, checkType,
+      SELECT time_bucket AS time, checkType,
         sumIf(increase, value = 'success') AS success,
         sumIf(increase, value LIKE 'failure%') AS failed
       FROM (
-        SELECT checkType, value, ${bucket} AS time,
+        SELECT checkType, value, time_bucket,
           if(max_val < lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY minute_bucket),
             max_val,
             max_val - lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY minute_bucket)
@@ -615,8 +615,8 @@ app.get("/api/sp/:id/performance/timeline", async (req, res) => {
           ORDER BY checkType, value, minute_bucket
         )
       )
-      GROUP BY time, checkType
-      ORDER BY time ASC
+      GROUP BY time_bucket, checkType
+      ORDER BY time_bucket ASC
       FORMAT JSONEachRow`
 
     const rows = await queryDealbot(sql)
