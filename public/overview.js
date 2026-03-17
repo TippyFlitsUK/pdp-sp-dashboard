@@ -56,8 +56,8 @@ function renderSPGrid(container, providers, perfData) {
     var rtTotal = rt.success + rt.failed
     var dsPct = dsTotal > 0 ? ((ds.success / dsTotal) * 100).toFixed(1) : "N/A"
     var rtPct = rtTotal > 0 ? ((rt.success / rtTotal) * 100).toFixed(1) : "N/A"
-    var dsSLA = dsPct !== "N/A" && parseFloat(dsPct) >= 97 && dsTotal >= 100
-    var rtSLA = rtPct !== "N/A" && parseFloat(rtPct) >= 97 && rtTotal >= 100
+    var dsSLA = dsPct !== "N/A" && parseFloat(dsPct) >= 97
+    var rtSLA = rtPct !== "N/A" && parseFloat(rtPct) >= 97
     var allPass = dsSLA && rtSLA
 
     // Card border color based on SLA

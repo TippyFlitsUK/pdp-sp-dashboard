@@ -197,8 +197,8 @@ function updateOverviewPerformance() {
     }
 
     var checkTypes = [
-      { key: "dataStorage", label: "Deals", slaMin: 100, slaPct: 97 },
-      { key: "retrieval", label: "Retrieval", slaMin: 100, slaPct: 97 },
+      { key: "dataStorage", label: "Deals", slaPct: 97 },
+      { key: "retrieval", label: "Retrieval", slaPct: 97 },
     ]
 
     var html = ''
@@ -208,14 +208,14 @@ function updateOverviewPerformance() {
       if (!stats) continue
       var total = stats.success + stats.failed
       var pct = total > 0 ? ((stats.success / total) * 100).toFixed(1) : "N/A"
-      var meetsSLA = pct !== "N/A" && parseFloat(pct) >= ct.slaPct && total >= ct.slaMin
+      var meetsSLA = pct !== "N/A" && parseFloat(pct) >= ct.slaPct
       html += sectionHeading(ct.label)
       html += summaryGrid([
         { label: "Success Rate", value: pct + "%", cls: rateClass(pct) },
         { label: "Total Tests", value: formatNum(total) },
         { label: "Successful", value: formatNum(stats.success), cls: "green" },
         { label: "Failed", value: formatNum(stats.failed), cls: stats.failed > 0 ? "errors" : "zero" },
-        { label: "SLA (\u2265" + ct.slaPct + "% / " + ct.slaMin + ")", value: meetsSLA ? "PASS" : "FAIL", cls: slaClass(meetsSLA) },
+        { label: "SLA (\u2265" + ct.slaPct + "%)", value: meetsSLA ? "PASS" : "FAIL", cls: slaClass(meetsSLA) },
       ])
     }
     el.innerHTML = html
@@ -876,9 +876,9 @@ async function loadPerformance(sp) {
 
     // Render each check type
     var checkTypes = [
-      { key: "dataStorage", label: "Deals", slaMin: 100, slaPct: 97 },
-      { key: "retrieval", label: "Retrieval", slaMin: 100, slaPct: 97 },
-      { key: "dataRetention", label: "Data Retention", slaMin: 100, slaFaultPct: 0.2 },
+      { key: "dataStorage", label: "Deals", slaPct: 97 },
+      { key: "retrieval", label: "Retrieval", slaPct: 97 },
+      { key: "dataRetention", label: "Data Retention", slaFaultPct: 0.2 },
     ]
 
     for (var ci = 0; ci < checkTypes.length; ci++) {
@@ -892,25 +892,25 @@ async function loadPerformance(sp) {
       if (ct.key === "dataRetention") {
         // Fault rate (lower is better)
         var faultPct = total > 0 ? ((stats.failed / total) * 100).toFixed(2) : "0"
-        meetsSLA = parseFloat(faultPct) <= ct.slaFaultPct && total >= ct.slaMin
+        meetsSLA = parseFloat(faultPct) <= ct.slaFaultPct
         html += sectionHeading(ct.label)
         html += summaryGrid([
           { label: "Fault Rate", value: faultPct + "%", cls: faultRateClass(faultPct) },
           { label: "Total Checks", value: formatNum(total) },
           { label: "Faults", value: formatNum(stats.failed), cls: stats.failed > 0 ? "errors" : "zero" },
-          { label: "SLA (\u2264" + ct.slaFaultPct + "% / " + ct.slaMin + ")", value: meetsSLA ? "PASS" : "FAIL", cls: slaClass(meetsSLA) },
+          { label: "SLA (\u2264" + ct.slaFaultPct + "%)", value: meetsSLA ? "PASS" : "FAIL", cls: slaClass(meetsSLA) },
         ])
       } else {
         // Success rate (higher is better)
         pct = total > 0 ? ((stats.success / total) * 100).toFixed(1) : "N/A"
-        meetsSLA = pct !== "N/A" && parseFloat(pct) >= ct.slaPct && total >= ct.slaMin
+        meetsSLA = pct !== "N/A" && parseFloat(pct) >= ct.slaPct
         html += sectionHeading(ct.label)
         html += summaryGrid([
           { label: "Success Rate", value: pct + "%", cls: rateClass(pct) },
           { label: "Total Tests", value: formatNum(total) },
           { label: "Successful", value: formatNum(stats.success), cls: "green", tab: "logs" },
           { label: "Failed", value: formatNum(stats.failed), cls: stats.failed > 0 ? "errors" : "zero", tab: "logs" },
-          { label: "SLA (\u2265" + ct.slaPct + "% / " + ct.slaMin + ")", value: meetsSLA ? "PASS" : "FAIL", cls: slaClass(meetsSLA) },
+          { label: "SLA (\u2265" + ct.slaPct + "%)", value: meetsSLA ? "PASS" : "FAIL", cls: slaClass(meetsSLA) },
         ])
       }
     }
