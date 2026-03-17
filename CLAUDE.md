@@ -27,6 +27,8 @@ Team: FOC WG (t468215). See memory file `reference_betterstack_sources.md` for f
 - Timing: `retrievalCheckMs`, `ipfsRetrievalFirstByteMs`, `ipfsRetrievalLastByteMs`, `ipfsRetrievalThroughputBps`, `ipniVerifyMs`
 - Timing averages: use `_sum` / `_count` gauge pairs (avgMerge returns null for histograms)
 - Old metric names (deals_created_total, retrievals_tested_total etc) stopped 2026-03-03 after dealbot upgrade
+- CRITICAL: `countMerge(events_count)` counts Prometheus SCRAPE data points (~5700/day), NOT actual test events (~30-140/day)
+- Correct aggregation: use `maxMerge(value_max)` per 1-min bucket with `lagInFrame` window function to detect counter resets and sum increments (see `counterIncreaseSql()` in server.js)
 
 ### 2. PDP Scan Subgraph (On-Chain Proofs)
 - Endpoint: `https://api.goldsky.com/api/public/project_cmdfaaxeuz6us01u359yjdctw/subgraphs/pdp-explorer/mainnet311b/gn`
