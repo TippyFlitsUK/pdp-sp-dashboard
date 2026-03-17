@@ -131,8 +131,3 @@ function spStat(label, value, cls) {
   '</div>'
 }
 
-function shortVersion(v) {
-  if (!v) return ""
-  var m = v.match(/(\d+\.\d+\.\d+)/)
-  return m ? "v" + m[1] : v.slice(0, 20)
-}

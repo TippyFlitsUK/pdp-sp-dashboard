@@ -188,107 +188,12 @@ main {
   margin-bottom: 0;
 }
 
-.stat-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-  position: relative;
-  overflow: hidden;
-  transition: border-color 0.2s;
-}
-
-.stat-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  opacity: 0.4;
-}
-
-.stat-card .stat-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 500;
-  margin-bottom: 6px;
-}
-
-.stat-card .stat-value {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 30px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.03em;
-}
-
-.stat-card .stat-value.green { color: var(--green); }
-.stat-card .stat-value.red { color: var(--red); }
-.stat-card .stat-value.blue { color: var(--accent); }
-
 /* ===== CARD GRID ===== */
 .card-grid {
   display: flex;
   flex-direction: column;
   gap: 0;
   margin-bottom: 28px;
-}
-
-.sp-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0;
-  cursor: pointer;
-  transition: all 0.25s ease;
-  overflow: hidden;
-  position: relative;
-}
-
-.sp-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  border-radius: var(--radius) var(--radius) 0 0;
-}
-
-.sp-card.status-healthy::before { background: var(--green); }
-.sp-card.status-warning::before { background: var(--amber); }
-.sp-card.status-error::before { background: var(--red); }
-.sp-card.status-offline::before { background: var(--text-muted); }
-.sp-card.status-nologs::before { background: var(--border); }
-
-.sp-card:hover {
-  border-color: var(--accent);
-  box-shadow: 0 4px 24px rgba(0, 144, 255, 0.08), 0 0 0 1px var(--accent-glow);
-  transform: translateY(-2px);
-}
-
-.sp-card.status-offline { opacity: 0.55; }
-.sp-card.status-nologs { opacity: 0.7; }
-
-.sp-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 18px 0;
-}
-
-.sp-card-header h3 {
-  font-size: 15px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
-  letter-spacing: -0.01em;
 }
 
 .sp-id {
@@ -299,30 +204,6 @@ main {
   padding: 3px 10px;
   border-radius: 20px;
   font-weight: 500;
-}
-
-.sp-card-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 12px 18px 4px;
-}
-
-.sp-card-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  padding: 6px 0;
-}
-
-.sp-card-row.sp-card-row-4 {
-  grid-template-columns: repeat(4, 1fr);
-}
-
-.sp-card-row .stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .stat-label {
@@ -346,18 +227,6 @@ main {
 .stat-value.green { color: var(--green); }
 .stat-value.zero { color: var(--text-muted); opacity: 0.4; }
 .stat-value.muted { color: var(--text-muted); }
-
-.sp-card-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 10px 18px;
-  margin-top: 4px;
-  border-top: 1px solid var(--border-subtle);
-  background: rgba(0,0,0,0.15);
-}
 
 .heartbeat-dot {
   display: inline-block;
@@ -841,92 +710,6 @@ td.level-info { color: var(--accent); }
 .key-metric .km-value.amber { color: var(--amber); }
 .key-metric .km-value.blue { color: var(--accent); }
 
-/* ===== OVERVIEW SECTION PANELS ===== */
-.overview-sections {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
-  margin-bottom: 20px;
-}
-
-.overview-section {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.overview-section:hover {
-  border-color: var(--accent);
-}
-
-.overview-section .os-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 14px;
-}
-
-.overview-section .os-title {
-  font-size: 12px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.overview-section .os-title::before {
-  content: "";
-  width: 3px;
-  height: 14px;
-  border-radius: 2px;
-  display: inline-block;
-}
-
-.overview-section.proving .os-title::before { background: var(--green); }
-.overview-section.storage .os-title::before { background: var(--accent); }
-.overview-section.economics .os-title::before { background: var(--amber); }
-.overview-section.tasks .os-title::before { background: var(--cyan); }
-.overview-section.performance .os-title::before { background: #a78bfa; }
-.overview-section.logs .os-title::before { background: var(--red); }
-
-.overview-section .os-arrow {
-  color: var(--text-muted);
-  font-size: 18px;
-  transition: transform 0.2s;
-}
-
-.overview-section:hover .os-arrow {
-  transform: translateX(3px);
-  color: var(--accent);
-}
-
-.overview-section .os-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-  gap: 16px;
-}
-
-.overview-section .os-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.overview-section .os-stat .stat-label {
-  font-size: 9px;
-}
-
-.overview-section .os-stat .stat-value {
-  font-size: 18px;
-  font-weight: 700;
-}
-
 /* Mini proving bar for overview */
 .mini-proving-bar {
   display: flex;
@@ -946,11 +729,6 @@ td.level-info { color: var(--accent); }
 .mini-proving-bar .mpb-segment.valid { background: var(--green); }
 .mini-proving-bar .mpb-segment.faulted { background: var(--red); }
 .mini-proving-bar .mpb-segment.pending { background: var(--border); }
-
-/* Full-width overview section */
-.overview-section.full-width {
-  grid-column: 1 / -1;
-}
 
 /* ===== TABLE SCROLL CONTAINER ===== */
 .table-scroll {
@@ -1401,6 +1179,6 @@ td.level-info { color: var(--accent); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.sp-card, .stat-card, .panel {
+.panel {
   animation: fadeIn 0.3s ease forwards;
 }

@@ -7,7 +7,6 @@ const { ENDPOINTS, gqlFetch, gqlPaginate } = require("./lib/subgraph")
 const {
   queryBetterStack, queryDealbot, validateHours, timeBucket,
   RECENT_TABLE, HISTORICAL_TABLE, COMMON_COLS, SUPPRESS_FILTER, CID_CONTACT_FILTER,
-  DEALBOT_RECENT, DEALBOT_HISTORICAL,
 } = require("./lib/betterstack")
 const { startLivenessProbes, getLiveness } = require("./lib/liveness")
 
@@ -23,7 +22,6 @@ app.use(express.static(path.join(__dirname, "public")))
 // --- Helpers ---
 
 const CLIENT_IDS = getTrackedSPs().map(sp => `'${sp.clientId}'`).join(", ")
-const VALID_CLIENT_IDS = new Set(getTrackedSPs().map(sp => sp.clientId))
 
 // --- API Routes ---
 
@@ -653,55 +651,6 @@ app.get("/api/sp/:id/performance/latency", async (req, res) => {
   }
 })
 
-// GET /api/sp/:id/tasks?hours=N — task health (Better Stack, hasLogs only)
-app.get("/api/sp/:id/tasks", async (req, res) => {
-  const sp = getSP(req.params.id)
-  if (!sp) return res.status(404).json({ error: "Unknown SP" })
-  if (!sp.hasLogs) return res.json({ available: false })
-
-  const hours = validateHours(req.query.hours)
-  const cacheKey = `sp:${sp.id}:tasks:${hours}`
-  const cached = cache.get(cacheKey)
-  if (cached) return res.json(cached)
-
-  try {
-    const sql = `
-      SELECT
-        JSONExtract(raw, 'logger', 'Nullable(String)') AS task,
-        count(*) AS total,
-        countIf(JSONExtract(raw, 'level', 'Nullable(String)') = 'error') AS errors,
-        countIf(JSONExtract(raw, 'level', 'Nullable(String)') = 'info') AS info_count
-      FROM (
-        SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
-        WHERE dt > now() - INTERVAL ${hours} HOUR
-          AND JSONExtract(raw, 'client_id', 'Nullable(String)') = '${sp.clientId}'
-          AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
-          AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
-          ${SUPPRESS_FILTER}
-        UNION ALL
-        SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
-        WHERE _row_type = 1
-          AND dt > now() - INTERVAL ${hours} HOUR
-          AND JSONExtract(raw, 'client_id', 'Nullable(String)') = '${sp.clientId}'
-          AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
-          AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
-          ${SUPPRESS_FILTER}
-      )
-      GROUP BY task
-      ORDER BY total DESC
-      LIMIT 30
-      FORMAT JSONEachRow`
-
-    const rows = await queryBetterStack(sql)
-    const result = { available: true, tasks: rows }
-    cache.set(cacheKey, result, BS_TTL)
-    res.json(result)
-  } catch (err) {
-    console.error(`sp/${sp.id}/tasks error:`, err.message)
-    res.status(500).json({ error: err.message })
-  }
-})
-
 // Dealbot metrics table (Prometheus, infra_prod)
 const DEALBOT_METRICS = "remote(t468215_infra_prod_metrics)"
 
@@ -751,7 +700,6 @@ app.get("/api/sp/:id/performance", async (req, res) => {
   const sp = getSP(req.params.id)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
-  const addrPrefix = sp.address.slice(0, 8) // e.g. "0x32c90c"
   const hours = validateHours(req.query.hours)
   const cacheKey = `sp:${sp.id}:performance:${hours}`
   const cached = cache.get(cacheKey)
@@ -990,6 +938,9 @@ app.get("/api/sp/:id/timeline", async (req, res) => {
 
   const hours = validateHours(req.query.hours)
   const bucket = timeBucket(hours)
+  const cacheKey = `sp:${sp.id}:timeline:${hours}`
+  const cached = cache.get(cacheKey)
+  if (cached) return res.json(cached)
 
   try {
     const sql = `
@@ -1017,7 +968,9 @@ app.get("/api/sp/:id/timeline", async (req, res) => {
       FORMAT JSONEachRow`
 
     const rows = await queryBetterStack(sql)
-    res.json({ available: true, timeline: rows })
+    const result = { available: true, timeline: rows }
+    cache.set(cacheKey, result, BS_TTL)
+    res.json(result)
   } catch (err) {
     console.error(`sp/${sp.id}/timeline error:`, err.message)
     res.status(500).json({ error: err.message })
