@@ -861,6 +861,14 @@ td.level-info { color: var(--accent); }
   text-overflow: ellipsis;
 }
 
+.stat-value.sla-pass {
+  color: var(--green);
+}
+
+.stat-value.sla-fail {
+  color: var(--red);
+}
+
 .sp-period {
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
