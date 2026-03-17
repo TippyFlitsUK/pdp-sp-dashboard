@@ -197,7 +197,7 @@ function initRouter() {
     btns.forEach(function(b) { b.classList.toggle("active", b.dataset.network === net) })
     spConfig = []
     currentSP = null
-    navigate("#overview")
+    history.replaceState(null, "", "/")
     loadOverview()
   })
 
@@ -213,7 +213,12 @@ function initRouter() {
 
   // Back button
   document.getElementById("back-btn").addEventListener("click", function() {
-    navigate("#overview")
+    history.replaceState(null, "", "/")
+    document.getElementById("section-overview").style.display = "block"
+    document.getElementById("section-detail").style.display = "none"
+    currentSP = null
+    currentTab = "overview"
+    loadOverview()
   })
 
   // Tab clicks
