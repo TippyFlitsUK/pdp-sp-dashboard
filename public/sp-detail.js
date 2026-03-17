@@ -28,19 +28,13 @@ async function loadSPDetail(sp) {
     document.getElementById("logs-content").innerHTML = ""
   }
 
-  // Render overview immediately with what we have from the network overview
-  renderSPOverview(sp)
+  // Load performance first (default tab), then others
+  await loadPerformance(sp)
 
-  // Load detail data sequentially, update overview sections as data arrives
   await loadProving(sp)
-  updateOverviewProving(sp)
 
   await loadEconomics(sp)
-  updateOverviewEconomics()
   loadRevenue(sp)
-
-  await loadPerformance(sp)
-  updateOverviewPerformance()
 
   if (sp.hasLogs) {
     loadLogsSummary(sp)
