@@ -198,7 +198,7 @@ function updateOverviewPerformance() {
 
     var checkTypes = [
       { key: "dataStorage", label: "Deals", slaPct: 97 },
-      { key: "retrieval", label: "Retrieval", slaPct: 97 },
+      { key: "retrieval", label: "Retrievals", slaPct: 97 },
     ]
 
     var html = ''
@@ -877,7 +877,7 @@ async function loadPerformance(sp) {
     // Render each check type
     var checkTypes = [
       { key: "dataStorage", label: "Deals", slaPct: 97 },
-      { key: "retrieval", label: "Retrieval", slaPct: 97 },
+      { key: "retrieval", label: "Retrievals", slaPct: 97 },
       { key: "dataRetention", label: "Data Retention", slaFaultPct: 0.2 },
     ]
 
@@ -982,7 +982,7 @@ async function loadPerfTimeline(sp) {
 
     var series = []
     if (retData.some(function(v) { return v !== null })) {
-      series.push({ name: "Retrieval %", color: "#0090ff", data: retData.map(function(v) { return v || 0 }) })
+      series.push({ name: "Retrievals %", color: "#0090ff", data: retData.map(function(v) { return v || 0 }) })
     }
     if (dealData.some(function(v) { return v !== null })) {
       series.push({ name: "Deals %", color: "#00d68f", data: dealData.map(function(v) { return v || 0 }) })

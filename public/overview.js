@@ -86,9 +86,9 @@ function renderSPGrid(container, providers, perfData) {
       '<div style="display:flex;align-items:center;gap:6px;min-width:0">' +
         '<span class="heartbeat-dot ' + bulletCls + '"></span>' +
         '<span class="sp-home-name">' + escapeHtml(sp.name) + '</span>' +
+        '<span class="sp-period">24h</span>' +
       '</div>' +
       '<span class="sp-id">ID ' + sp.id + '</span>' +
-      '<span class="sp-period">24h</span>' +
     '</div>'
 
     // Performance only
@@ -100,7 +100,7 @@ function renderSPGrid(container, providers, perfData) {
         spStat("SLA", dsSLA ? "PASS" : dsTotal === 0 ? "--" : "FAIL", dsSLA ? "sla-pass" : dsTotal > 0 ? "sla-fail" : "muted") +
       '</div>' +
       '<div class="sp-home-row sp-home-row-4">' +
-        spStat("Retrieval", rtPct + "%", rtSLA ? "rate-good" : rtTotal > 0 ? "rate-bad" : "muted") +
+        spStat("Retrievals", rtPct + "%", rtSLA ? "rate-good" : rtTotal > 0 ? "rate-bad" : "muted") +
         spStat("Tests", formatNum(rtTotal), "") +
         spStat("Failed", formatNum(rt.failed), rt.failed > 0 ? "errors" : "zero") +
         spStat("SLA", rtSLA ? "PASS" : rtTotal === 0 ? "--" : "FAIL", rtSLA ? "sla-pass" : rtTotal > 0 ? "sla-fail" : "muted") +
