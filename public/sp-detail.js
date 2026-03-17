@@ -28,12 +28,9 @@ async function loadSPDetail(sp) {
     document.getElementById("logs-content").innerHTML = ""
   }
 
-  // Load performance first (default tab), then others
+  // Load performance first (default tab), then proving+economics in parallel, then revenue async
   await loadPerformance(sp)
-
-  await loadProving(sp)
-
-  await loadEconomics(sp)
+  await Promise.all([loadProving(sp), loadEconomics(sp)])
   loadRevenue(sp)
 
   if (sp.hasLogs) {
@@ -60,11 +57,6 @@ function setLoading(id, text) {
     el.innerHTML = ''
     el.classList.remove("is-loading")
   }
-}
-
-function clearLoading(id) {
-  var el = document.getElementById(id)
-  if (el) el.classList.remove("is-loading", "loading")
 }
 
 function setError(id, msg) {
@@ -221,19 +213,6 @@ async function showDatasetModal(spId, setId) {
   }
 }
 
-function summaryStatHtml(label, value) {
-  return '<div class="summary-stat">' +
-    '<span class="stat-label">' + label + '</span>' +
-    '<span class="stat-value">' + value + '</span>' +
-  '</div>'
-}
-
-function shortVersion(v) {
-  if (!v) return ""
-  var m = v.match(/(\d+\.\d+\.\d+)/)
-  return m ? "v" + m[1] : v.slice(0, 20)
-}
-
 // ============================================================
 // PROVING TAB
 // ============================================================
@@ -248,8 +227,8 @@ async function loadProving(sp) {
     var allFaults = data.faults || []
     var sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 86400
     var faults7d = allFaults.filter(function(f) { return Number(f.timestamp) >= sevenDaysAgo })
-    var totalFaultPeriods = allFaults.length
-    var faultPeriods7d = faults7d.length
+    var totalFaultPeriods = allFaults.reduce(function(sum, f) { return sum + (f.periodsFaulted || 1) }, 0)
+    var faultPeriods7d = faults7d.reduce(function(sum, f) { return sum + (f.periodsFaulted || 1) }, 0)
 
     // Last Success = latest week's success rate (matching PDP Scan)
     var latestWeek = data.weeklyActivity && data.weeklyActivity[0] ? data.weeklyActivity[0] : null
@@ -263,7 +242,7 @@ async function loadProving(sp) {
     var html = summaryGrid([
       { label: "Total Data Sets", value: formatNum(prov.totalProofSets) },
       { label: "Data Stored", value: formatBytes(prov.totalDataSize) },
-      { label: "Total Pieces", value: Number(prov.totalRoots).toLocaleString() },
+      { label: "Total Pieces", value: Number(prov.totalRoots || 0).toLocaleString() },
     ]) + '<div class="summary-grid">' +
       '<div class="sg-card clickable" onclick="showFaultsModal(\'all\')">' +
         '<div class="stat-label">Faulted Periods (All Time)</div>' +

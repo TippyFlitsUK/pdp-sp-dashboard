@@ -167,11 +167,6 @@ button:hover, select:hover {
   border-radius: 50%;
 }
 
-/* ===== NAV ===== */
-nav {
-  display: none;
-}
-
 /* ===== MAIN ===== */
 main {
   padding: 24px 40px;
@@ -238,7 +233,6 @@ main {
 }
 
 .heartbeat-dot.alive { background: var(--green); box-shadow: 0 0 6px var(--green); }
-.heartbeat-dot.stale { background: var(--amber); }
 .heartbeat-dot.dead { background: var(--red); }
 .heartbeat-dot.unknown { background: var(--text-muted); }
 
@@ -661,15 +655,9 @@ td.level-info { color: var(--accent); }
 .pct-bar-fill.amber { background: var(--amber); }
 
 /* ===== RESPONSIVE ===== */
-@media (max-width: 1024px) {
-  .stats-bar { grid-template-columns: repeat(3, 1fr); }
-}
-
 @media (max-width: 768px) {
   header { flex-direction: column; align-items: flex-start; padding: 14px 16px; }
   main { padding: 16px; }
-  .card-grid { grid-template-columns: 1fr; }
-  .stats-bar { grid-template-columns: repeat(2, 1fr); }
   .detail-tabs { flex-wrap: nowrap; }
   .summary-row { gap: 16px; }
 }

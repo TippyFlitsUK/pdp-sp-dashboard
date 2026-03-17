@@ -16,6 +16,7 @@ const cache = new Cache()
 
 const SUBGRAPH_TTL = 5 * 60 * 1000  // 5 min
 const BS_TTL = 60 * 1000             // 1 min
+const DEALBOT_METRICS = "remote(t468215_infra_prod_metrics)"
 
 app.use(express.static(path.join(__dirname, "public")))
 
@@ -372,6 +373,11 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
   const sp = getSP(req.params.id)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   const setId = req.params.setId
+  if (!/^\d+$/.test(setId)) return res.status(400).json({ error: "Invalid setId" })
+
+  const cacheKey = `sp:${sp.id}:dataset:${setId}`
+  const cached = cache.get(cacheKey)
+  if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
@@ -403,7 +409,9 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
 
     if (!pdpData && !fwssData) return res.status(404).json({ error: "Dataset not found" })
 
-    res.json({ pdp: pdpData, fwss: fwssData, faults: fwssFaults })
+    const result = { pdp: pdpData, fwss: fwssData, faults: fwssFaults }
+    cache.set(cacheKey, result, SUBGRAPH_TTL)
+    res.json(result)
   } catch (err) {
     console.error(`sp/${sp.id}/dataset/${setId} error:`, err.message)
     res.status(500).json({ error: err.message })
@@ -523,6 +531,11 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
   const sp = getSP(req.params.id)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   const railId = req.params.railId
+  if (!/^\d+$/.test(railId)) return res.status(400).json({ error: "Invalid railId" })
+
+  const cacheKey = `sp:${sp.id}:rail:${railId}`
+  const cached = cache.get(cacheKey)
+  if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
@@ -571,7 +584,9 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
       }
     }`).then(d => d.dataSets?.[0] || null).catch(() => null)
 
-    res.json({ rail, dataset: fwssDataset })
+    const result = { rail, dataset: fwssDataset }
+    cache.set(cacheKey, result, SUBGRAPH_TTL)
+    res.json(result)
   } catch (err) {
     console.error(`sp/${sp.id}/rail/${railId} error:`, err.message)
     res.status(500).json({ error: err.message })
@@ -701,9 +716,6 @@ app.get("/api/sp/:id/performance/latency", async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
-
-// Dealbot metrics table (infra_prod)
-const DEALBOT_METRICS = "remote(t468215_infra_prod_metrics)"
 
 // Dealbot counter delta SQL — matches Better Stack dashboard pattern exactly:
 // 1. avgMerge(value_avg) grouped by series_id to get per-pod values
@@ -885,7 +897,7 @@ app.get("/api/sp/:id/performance", async (req, res) => {
     }
 
     const result = { available: true, counters, timing }
-    cache.set(cacheKey, result, SUBGRAPH_TTL)
+    cache.set(cacheKey, result, BS_TTL)
     res.json(result)
   } catch (err) {
     console.error(`sp/${sp.id}/performance error:`, err.message)
