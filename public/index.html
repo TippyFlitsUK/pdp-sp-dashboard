@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDP SP Dashboard</title>
+  <link rel="stylesheet" href="style.css?v=17">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1><a href="#overview" style="color:inherit;text-decoration:none">PDP <span>SP Dashboard</span></a></h1>
+      <span class="subtitle">Filecoin Onchain Cloud</span>
+    </div>
+    <div class="header-right">
+      <span id="last-updated"></span>
+      <button id="refresh-btn">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Overview Section -->
+    <section id="section-overview">
+      <div class="stats-bar" id="global-stats">
+        <div class="loading">Loading network stats</div>
+      </div>
+      <div class="card-grid" id="sp-grid">
+        <div class="loading">Loading providers</div>
+      </div>
+    </section>
+
+    <!-- SP Detail Section -->
+    <section id="section-detail" style="display:none">
+      <div class="detail-nav">
+        <button id="back-btn" class="back-btn">&larr; Back</button>
+        <h2 id="detail-title"></h2>
+      </div>
+
+      <!-- Tab navigation -->
+      <div class="detail-tabs" id="detail-tabs">
+        <button class="detail-tab active" data-tab="overview">Overview</button>
+        <button class="detail-tab" data-tab="performance">Performance</button>
+        <button class="detail-tab" data-tab="proving">Proving & Storage</button>
+        <button class="detail-tab" data-tab="economics">Economics</button>
+        <button class="detail-tab" data-tab="logs">Logs</button>
+      </div>
+
+      <!-- Tab: Overview (summary cards linking to each section) -->
+      <div class="tab-content" id="tab-overview">
+        <div class="sp-overview-grid" id="sp-overview-grid">
+          <div class="loading">Loading overview</div>
+        </div>
+      </div>
+
+      <!-- Tab: Proving -->
+      <div class="tab-content" id="tab-proving" style="display:none">
+        <div class="panel" id="panel-proving">
+          <h3>Proving</h3>
+          <div id="proving-content"></div>
+        </div>
+      </div>
+
+      <!-- Tab: Economics -->
+      <div class="tab-content" id="tab-economics" style="display:none">
+        <div class="panel" id="panel-economics">
+          <h3>Economics</h3>
+          <div id="economics-content"></div>
+        </div>
+      </div>
+
+      <!-- Tab: Performance -->
+      <div class="tab-content" id="tab-performance" style="display:none">
+        <div class="panel" id="panel-performance">
+          <div class="detail-header">
+            <h3>Performance <a id="perf-dealbot-link" href="#" target="_blank" style="font-size:11px;font-weight:400;color:var(--text-muted);text-decoration:none;margin-left:8px;text-transform:none;letter-spacing:0">Detailed Dealbot Dashboard &rsaquo;</a></h3>
+            <div class="time-range-btns" id="perf-time-range-btns">
+              <button data-hours="1">1h</button>
+              <button data-hours="6">6h</button>
+              <button data-hours="24" class="active">24h</button>
+              <button data-hours="168">7d</button>
+            </div>
+          </div>
+          <div id="performance-content"></div>
+        </div>
+      </div>
+
+      <!-- Tab: Logs -->
+      <div class="tab-content" id="tab-logs" style="display:none">
+        <div class="panel" id="panel-logs">
+          <div class="detail-header">
+            <h3>Logs <a id="logs-betterstack-link" href="#" target="_blank" style="font-size:11px;font-weight:400;color:var(--text-muted);text-decoration:none;margin-left:8px;text-transform:none;letter-spacing:0">Detailed Log Dashboard &rsaquo;</a></h3>
+            <div class="log-controls">
+              <div class="time-range-btns" id="time-range-btns">
+                <button data-hours="1">1h</button>
+                <button data-hours="6">6h</button>
+                <button data-hours="24" class="active">24h</button>
+                <button data-hours="168">7d</button>
+              </div>
+            </div>
+          </div>
+          <div id="log-summary-cards"></div>
+          <div id="timeline-container" class="chart-container">
+            <canvas id="timeline-canvas"></canvas>
+          </div>
+          <div id="errors-content"></div>
+          <div id="patterns-content"></div>
+          <div id="logs-content"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Log Detail Modal -->
+  <div class="modal-overlay" id="log-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="log-modal-title">Log Detail</h3>
+        <button class="modal-close" onclick="document.getElementById('log-modal').style.display='none'">&times;</button>
+      </div>
+      <div class="modal-body" id="log-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Rail Detail Modal -->
+  <div class="modal-overlay" id="rail-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="rail-modal-title">Rail Details</h3>
+        <button class="modal-close" onclick="document.getElementById('rail-modal').style.display='none'">&times;</button>
+      </div>
+      <div class="modal-body" id="rail-modal-body"><div class="loading">Loading rail details</div></div>
+    </div>
+  </div>
+
+  <!-- Dataset Detail Modal -->
+  <div class="modal-overlay" id="dataset-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="dataset-modal-title">Dataset Details</h3>
+        <button class="modal-close" onclick="document.getElementById('dataset-modal').style.display='none'">&times;</button>
+      </div>
+      <div class="modal-body" id="dataset-modal-body"><div class="loading">Loading dataset details</div></div>
+    </div>
+  </div>
+
+  <!-- Faults Modal -->
+  <div class="modal-overlay" id="faults-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="faults-modal-title">Faulted Periods</h3>
+        <button class="modal-close" onclick="document.getElementById('faults-modal').style.display='none'">&times;</button>
+      </div>
+      <div class="modal-body" id="faults-modal-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js?v=17"></script>
+  <script src="overview.js?v=17"></script>
+  <script src="sp-detail.js?v=17"></script>
+</body>
+</html>
