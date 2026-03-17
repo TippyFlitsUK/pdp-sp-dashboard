@@ -591,17 +591,30 @@ app.get("/api/sp/:id/performance/timeline", async (req, res) => {
 
   try {
     const sql = `
-      SELECT
-        ${bucket} AS time,
-        JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
-        countMergeIf(events_count, JSONExtract(tags, 'value', 'Nullable(String)') = 'success') AS success,
-        countMergeIf(events_count, JSONExtract(tags, 'value', 'Nullable(String)') LIKE 'failure%') AS failed,
-        countMergeIf(events_count, JSONExtract(tags, 'value', 'Nullable(String)') NOT IN ('pending')) AS total
-      FROM ${DEALBOT_METRICS}
-      WHERE dt > now() - INTERVAL ${hours} HOUR
-        AND name = 'retrievalStatus'
-        AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-        AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+      SELECT time, checkType,
+        sumIf(increase, value = 'success') AS success,
+        sumIf(increase, value LIKE 'failure%') AS failed
+      FROM (
+        SELECT checkType, value, ${bucket} AS time,
+          if(max_val < lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY minute_bucket),
+            max_val,
+            max_val - lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY minute_bucket)
+          ) AS increase, minute_bucket
+        FROM (
+          SELECT toStartOfMinute(dt) AS minute_bucket, ${bucket} AS time_bucket,
+            JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
+            JSONExtract(tags, 'value', 'Nullable(String)') AS value,
+            maxMerge(value_max) AS max_val
+          FROM ${DEALBOT_METRICS}
+          WHERE dt > now() - INTERVAL ${hours} HOUR
+            AND name = 'retrievalStatus'
+            AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
+            AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+            AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          GROUP BY minute_bucket, time_bucket, checkType, value
+          ORDER BY checkType, value, minute_bucket
+        )
+      )
       GROUP BY time, checkType
       ORDER BY time ASC
       FORMAT JSONEachRow`
@@ -654,6 +667,36 @@ app.get("/api/sp/:id/performance/latency", async (req, res) => {
 // Dealbot metrics table (Prometheus, infra_prod)
 const DEALBOT_METRICS = "remote(t468215_infra_prod_metrics)"
 
+// Counter increase SQL: detects Prometheus counter resets and sums increments
+// Uses window function lagInFrame to compare consecutive 1-min buckets
+function counterIncreaseSql(hours, providerFilter) {
+  return `
+    SELECT checkType, value, sum(increase) AS cnt
+    FROM (
+      SELECT checkType, value,
+        if(max_val < lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY bucket),
+          max_val,
+          max_val - lagInFrame(max_val, 1, 0) OVER (PARTITION BY checkType, value ORDER BY bucket)
+        ) AS increase, bucket
+      FROM (
+        SELECT toStartOfMinute(dt) AS bucket,
+          JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
+          JSONExtract(tags, 'value', 'Nullable(String)') AS value,
+          maxMerge(value_max) AS max_val
+        FROM ${DEALBOT_METRICS}
+        WHERE dt > now() - INTERVAL ${hours} HOUR
+          AND name = 'retrievalStatus'
+          AND ${providerFilter}
+          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+        GROUP BY bucket, checkType, value
+        ORDER BY checkType, value, bucket
+      )
+    )
+    GROUP BY checkType, value
+    ORDER BY checkType, value
+    FORMAT JSONEachRow`
+}
+
 // GET /api/network/performance — bulk dealbot performance for all providers (24h)
 app.get("/api/network/performance", async (req, res) => {
   const cacheKey = "network:performance"
@@ -662,15 +705,28 @@ app.get("/api/network/performance", async (req, res) => {
 
   try {
     const sql = `
-      SELECT
-        JSONExtract(tags, 'providerId', 'Nullable(String)') AS providerId,
-        JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
-        JSONExtract(tags, 'value', 'Nullable(String)') AS value,
-        countMerge(events_count) AS cnt
-      FROM ${DEALBOT_METRICS}
-      WHERE dt > now() - INTERVAL 24 HOUR
-        AND name = 'retrievalStatus'
-        AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+      SELECT providerId, checkType, value, sum(increase) AS cnt
+      FROM (
+        SELECT providerId, checkType, value,
+          if(max_val < lagInFrame(max_val, 1, 0) OVER (PARTITION BY providerId, checkType, value ORDER BY bucket),
+            max_val,
+            max_val - lagInFrame(max_val, 1, 0) OVER (PARTITION BY providerId, checkType, value ORDER BY bucket)
+          ) AS increase, bucket
+        FROM (
+          SELECT toStartOfMinute(dt) AS bucket,
+            JSONExtract(tags, 'providerId', 'Nullable(String)') AS providerId,
+            JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
+            JSONExtract(tags, 'value', 'Nullable(String)') AS value,
+            maxMerge(value_max) AS max_val
+          FROM ${DEALBOT_METRICS}
+          WHERE dt > now() - INTERVAL 24 HOUR
+            AND name = 'retrievalStatus'
+            AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+            AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          GROUP BY bucket, providerId, checkType, value
+          ORDER BY providerId, checkType, value, bucket
+        )
+      )
       GROUP BY providerId, checkType, value
       ORDER BY providerId, checkType, value
       FORMAT JSONEachRow`
@@ -709,19 +765,8 @@ app.get("/api/sp/:id/performance", async (req, res) => {
     const provFilter = `JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
       AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
 
-    // Status counters (success/failure/pending per checkType)
-    const counterSql = `
-      SELECT
-        JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
-        JSONExtract(tags, 'value', 'Nullable(String)') AS value,
-        countMerge(events_count) AS cnt
-      FROM ${DEALBOT_METRICS}
-      WHERE dt > now() - INTERVAL ${hours} HOUR
-        AND name = 'retrievalStatus'
-        AND ${provFilter}
-      GROUP BY checkType, value
-      ORDER BY checkType, value
-      FORMAT JSONEachRow`
+    // Status counters using counter increase detection
+    const counterSql = counterIncreaseSql(hours, provFilter)
 
     // Timing averages from _sum/_count gauge pairs
     const timingSql = `
