@@ -3,9 +3,9 @@ const express = require("express")
 const path = require("path")
 const { Cache } = require("./lib/cache")
 const { getAllSPs, getTrackedSPs, getSP } = require("./lib/sp-config")
-const { ENDPOINTS, gqlFetch, gqlPaginate } = require("./lib/subgraph")
+const { getEndpoints, gqlFetch, gqlPaginate } = require("./lib/subgraph")
 const {
-  queryBetterStack, queryDealbot, validateHours, timeBucket,
+  queryBetterStack, queryDealbot, validateHours, timeBucket, getDealbotMetrics,
   RECENT_TABLE, HISTORICAL_TABLE, COMMON_COLS, SUPPRESS_FILTER, CID_CONTACT_FILTER,
 } = require("./lib/betterstack")
 const { startLivenessProbes, getLiveness } = require("./lib/liveness")
@@ -16,20 +16,26 @@ const cache = new Cache()
 
 const SUBGRAPH_TTL = 5 * 60 * 1000  // 5 min
 const BS_TTL = 60 * 1000             // 1 min
-const DEALBOT_METRICS = "remote(t468215_infra_prod_metrics)"
 
 app.use(express.static(path.join(__dirname, "public")))
 
 // --- Helpers ---
 
-const CLIENT_IDS = getTrackedSPs().map(sp => `'${sp.clientId}'`).join(", ")
+function parseNetwork(req) {
+  return req.query.network === "calibration" ? "calibration" : "mainnet"
+}
+
+function getClientIds(network) {
+  return getTrackedSPs(network).map(sp => `'${sp.clientId}'`).join(", ")
+}
 
 // --- API Routes ---
 
 // GET /api/config — SP list with liveness
 app.get("/api/config", (req, res) => {
-  const liveness = getLiveness()
-  const sps = getAllSPs().map(sp => ({
+  const network = parseNetwork(req)
+  const liveness = getLiveness(network)
+  const sps = getAllSPs(network).map(sp => ({
     ...sp,
     liveness: liveness[sp.id] || { alive: null, latencyMs: null, lastCheck: null },
   }))
@@ -38,13 +44,15 @@ app.get("/api/config", (req, res) => {
 
 // GET /api/network/global — NetworkMetric + GlobalMetric totals
 app.get("/api/network/global", async (req, res) => {
-  const cacheKey = "network:global"
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const cacheKey = `network:global:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
   try {
-    const [pdpData, fwssData] = await Promise.all([
-      gqlFetch(ENDPOINTS.pdpScan, `{
+    const promises = [
+      gqlFetch(endpoints.pdpScan, `{
         networkMetrics(first: 1) {
           totalProviders
           totalProofSets
@@ -54,14 +62,24 @@ app.get("/api/network/global", async (req, res) => {
           totalFaultedPeriods
         }
       }`),
-      gqlFetch(ENDPOINTS.fwss, `{
-        globalMetrics(first: 1) {
-          totalDataSets
-          totalPieces
-          totalStorageBytes
-        }
-      }`),
-    ])
+    ]
+
+    // FWSS may be null on calibnet
+    if (endpoints.fwss) {
+      promises.push(
+        gqlFetch(endpoints.fwss, `{
+          globalMetrics(first: 1) {
+            totalDataSets
+            totalPieces
+            totalStorageBytes
+          }
+        }`)
+      )
+    } else {
+      promises.push(Promise.resolve({ globalMetrics: [] }))
+    }
+
+    const [pdpData, fwssData] = await Promise.all(promises)
 
     const pdp = pdpData.networkMetrics?.[0] || {}
     const fwss = fwssData.globalMetrics?.[0] || {}
@@ -88,7 +106,10 @@ app.get("/api/network/global", async (req, res) => {
 
 // GET /api/network/overview — unified SP data from all sources
 app.get("/api/network/overview", async (req, res) => {
-  const cacheKey = "network:overview"
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const CLIENT_IDS = getClientIds(network)
+  const cacheKey = `network:overview:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
@@ -96,7 +117,7 @@ app.get("/api/network/overview", async (req, res) => {
     // Parallel fetch all data sources
     const [pdpProviders, fwssDatasets, filpayRails, bsOverview, bsVersions] = await Promise.all([
       // PDP Scan providers
-      gqlFetch(ENDPOINTS.pdpScan, `{
+      gqlFetch(endpoints.pdpScan, `{
         providers(first: 100) {
           id
           address
@@ -109,19 +130,21 @@ app.get("/api/network/overview", async (req, res) => {
       }`).then(d => d.providers || []).catch(() => []),
 
       // FWSS datasets aggregated per provider
-      gqlPaginate(ENDPOINTS.fwss, "dataSets", `
-        dataSetId
-        providerId
-        payer
-        payee
-        pdpRailId
-        totalPieces
-        totalSize
-        status
-      `).catch(() => []),
+      endpoints.fwss
+        ? gqlPaginate(endpoints.fwss, "dataSets", `
+            dataSetId
+            providerId
+            payer
+            payee
+            pdpRailId
+            totalPieces
+            totalSize
+            status
+          `).catch(() => [])
+        : Promise.resolve([]),
 
       // FilecoinPay active rails
-      gqlPaginate(ENDPOINTS.filecoinPay, "rails", `
+      gqlPaginate(endpoints.filecoinPay, "rails", `
         railId
         paymentRate
         state
@@ -130,8 +153,8 @@ app.get("/api/network/overview", async (req, res) => {
         payee { id }
       `, 'state: "ACTIVE"').catch(() => []),
 
-      // Better Stack overview (7 tracked SPs)
-      queryBetterStack(`
+      // Better Stack overview (tracked SPs)
+      CLIENT_IDS ? queryBetterStack(`
         SELECT
           JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
           CASE WHEN ${CID_CONTACT_FILTER} THEN 'cid.contact'
@@ -155,10 +178,10 @@ app.get("/api/network/overview", async (req, res) => {
             ${SUPPRESS_FILTER}
         )
         GROUP BY sp, level
-        FORMAT JSONEachRow`).catch(() => []),
+        FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
 
       // Better Stack curio versions
-      queryBetterStack(`
+      CLIENT_IDS ? queryBetterStack(`
         SELECT
           JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
           argMax(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt) AS curio_version
@@ -177,7 +200,7 @@ app.get("/api/network/overview", async (req, res) => {
             AND JSONExtract(raw, 'curio_version', 'Nullable(String)') NOT IN ('', 'Error parsing language')
         )
         GROUP BY sp
-        FORMAT JSONEachRow`).catch(() => []),
+        FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
     ])
 
     // Build per-provider index from PDP Scan (keyed by lowercase address)
@@ -236,8 +259,8 @@ app.get("/api/network/overview", async (req, res) => {
     }
 
     // Merge all into SP list
-    const liveness = getLiveness()
-    const result = getAllSPs().map(sp => {
+    const liveness = getLiveness(network)
+    const result = getAllSPs(network).map(sp => {
       const addr = sp.address.toLowerCase()
       const pdp = providerMap[addr]?.pdp || null
       const fwss = fwssByProvider[String(sp.id)]
@@ -279,16 +302,18 @@ app.get("/api/network/overview", async (req, res) => {
 
 // GET /api/sp/:id/proving
 app.get("/api/sp/:id/proving", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
-  const cacheKey = `sp:${sp.id}:proving`
+  const cacheKey = `sp:${sp.id}:proving:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
-    const data = await gqlFetch(ENDPOINTS.pdpScan, `{
+    const data = await gqlFetch(endpoints.pdpScan, `{
       provider(id: "${addr}") {
         totalProofSets
         totalRoots
@@ -325,11 +350,13 @@ app.get("/api/sp/:id/proving", async (req, res) => {
     }`)
 
     // Fetch FWSS dataset status (has Terminated status that PDP Scan doesn't)
-    const fwssDatasets = await gqlPaginate(ENDPOINTS.fwss, "dataSets", `
-      dataSetId
-      status
-      pdpRailId
-    `, `providerId: "${sp.id}"`).catch(() => [])
+    const fwssDatasets = endpoints.fwss
+      ? await gqlPaginate(endpoints.fwss, "dataSets", `
+          dataSetId
+          status
+          pdpRailId
+        `, `providerId: "${sp.id}"`).catch(() => [])
+      : []
 
     // Merge FWSS status into PDP Scan datasets (dataSetId matches setId)
     const fwssStatusMap = {}
@@ -343,15 +370,17 @@ app.get("/api/sp/:id/proving", async (req, res) => {
     }
 
     // Fetch faults from FWSS subgraph
-    const faults = await gqlPaginate(ENDPOINTS.fwss, "faults", `
-      id
-      periodsFaulted
-      deadline
-      timestamp
-      blockNumber
-      txHash
-      dataSet { dataSetId }
-    `, `dataSet_: {providerId: "${sp.id}"}`, "timestamp").catch(() => [])
+    const faults = endpoints.fwss
+      ? await gqlPaginate(endpoints.fwss, "faults", `
+          id
+          periodsFaulted
+          deadline
+          timestamp
+          blockNumber
+          txHash
+          dataSet { dataSetId }
+        `, `dataSet_: {providerId: "${sp.id}"}`, "timestamp").catch(() => [])
+      : []
 
     const result = {
       provider: data.provider,
@@ -370,19 +399,21 @@ app.get("/api/sp/:id/proving", async (req, res) => {
 
 // GET /api/sp/:id/dataset/:setId — single dataset detail from PDP Scan + FWSS
 app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   const setId = req.params.setId
   if (!/^\d+$/.test(setId)) return res.status(400).json({ error: "Invalid setId" })
 
-  const cacheKey = `sp:${sp.id}:dataset:${setId}`
+  const cacheKey = `sp:${sp.id}:dataset:${setId}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
     const [pdpData, fwssData, fwssFaults] = await Promise.all([
-      gqlFetch(ENDPOINTS.pdpScan, `{
+      gqlFetch(endpoints.pdpScan, `{
         dataSets(first: 1, where: {setId: "${setId}", owner: "${addr}"}) {
           setId leafCount challengeRange isActive
           lastProvenEpoch nextChallengeEpoch nextDeadline firstDeadline
@@ -393,18 +424,22 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
         }
       }`).then(d => d.dataSets?.[0] || null).catch(() => null),
 
-      gqlFetch(ENDPOINTS.fwss, `{
-        dataSets(first: 1, where: {dataSetId: "${setId}", providerId: "${sp.id}"}) {
-          dataSetId providerId payer payee
-          pdpRailId cacheMissRailId cdnRailId
-          totalPieces totalSize withCDN withIPFSIndexing
-          status createdAt createdAtBlock createdAtTxHash
-        }
-      }`).then(d => d.dataSets?.[0] || null).catch(() => null),
+      endpoints.fwss
+        ? gqlFetch(endpoints.fwss, `{
+            dataSets(first: 1, where: {dataSetId: "${setId}", providerId: "${sp.id}"}) {
+              dataSetId providerId payer payee
+              pdpRailId cacheMissRailId cdnRailId
+              totalPieces totalSize withCDN withIPFSIndexing
+              status createdAt createdAtBlock createdAtTxHash
+            }
+          }`).then(d => d.dataSets?.[0] || null).catch(() => null)
+        : Promise.resolve(null),
 
-      gqlPaginate(ENDPOINTS.fwss, "faults", `
-        id periodsFaulted deadline timestamp txHash
-      `, `dataSet: "${setId}"`, "timestamp").catch(() => []),
+      endpoints.fwss
+        ? gqlPaginate(endpoints.fwss, "faults", `
+            id periodsFaulted deadline timestamp txHash
+          `, `dataSet: "${setId}"`, "timestamp").catch(() => [])
+        : Promise.resolve([]),
     ])
 
     if (!pdpData && !fwssData) return res.status(404).json({ error: "Dataset not found" })
@@ -420,16 +455,18 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
 
 // GET /api/sp/:id/revenue — daily settlement history
 app.get("/api/sp/:id/revenue", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
-  const cacheKey = `sp:${sp.id}:revenue`
+  const cacheKey = `sp:${sp.id}:revenue:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
-    const settlements = await gqlPaginate(ENDPOINTS.filecoinPay, "settlements", `
+    const settlements = await gqlPaginate(endpoints.filecoinPay, "settlements", `
       totalNetPayeeAmount
       createdAt
     `, `rail_: {payee: "${addr}"}, totalNetPayeeAmount_gt: "0"`, "createdAt")
@@ -456,17 +493,19 @@ app.get("/api/sp/:id/revenue", async (req, res) => {
 
 // GET /api/sp/:id/economics
 app.get("/api/sp/:id/economics", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
-  const cacheKey = `sp:${sp.id}:economics`
+  const cacheKey = `sp:${sp.id}:economics:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
     const [rails, accountData] = await Promise.all([
-      gqlPaginate(ENDPOINTS.filecoinPay, "rails", `
+      gqlPaginate(endpoints.filecoinPay, "rails", `
         railId
         paymentRate
         state
@@ -478,7 +517,7 @@ app.get("/api/sp/:id/economics", async (req, res) => {
         createdAt
       `, `payee: "${addr}"`, "railId"),
 
-      gqlFetch(ENDPOINTS.filecoinPay, `{
+      gqlFetch(endpoints.filecoinPay, `{
         userTokens(where: {account: "${addr}"}) {
           funds
           payout
@@ -528,18 +567,20 @@ app.get("/api/sp/:id/economics", async (req, res) => {
 
 // GET /api/sp/:id/rail/:railId — single rail detail
 app.get("/api/sp/:id/rail/:railId", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   const railId = req.params.railId
   if (!/^\d+$/.test(railId)) return res.status(400).json({ error: "Invalid railId" })
 
-  const cacheKey = `sp:${sp.id}:rail:${railId}`
+  const cacheKey = `sp:${sp.id}:rail:${railId}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
   try {
     const addr = sp.address.toLowerCase()
-    const data = await gqlFetch(ENDPOINTS.filecoinPay, `{
+    const data = await gqlFetch(endpoints.filecoinPay, `{
       rails(first: 1, where: {railId: "${railId}", payee: "${addr}"}) {
         railId
         paymentRate
@@ -575,14 +616,16 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
     if (!rail) return res.status(404).json({ error: "Rail not found" })
 
     // Find linked FWSS dataset via pdpRailId
-    const fwssDataset = await gqlFetch(ENDPOINTS.fwss, `{
-      dataSets(first: 1, where: {pdpRailId: "${railId}", providerId: "${sp.id}"}) {
-        dataSetId
-        status
-        totalPieces
-        totalSize
-      }
-    }`).then(d => d.dataSets?.[0] || null).catch(() => null)
+    const fwssDataset = endpoints.fwss
+      ? await gqlFetch(endpoints.fwss, `{
+          dataSets(first: 1, where: {pdpRailId: "${railId}", providerId: "${sp.id}"}) {
+            dataSetId
+            status
+            totalPieces
+            totalSize
+          }
+        }`).then(d => d.dataSets?.[0] || null).catch(() => null)
+      : null
 
     const result = { rail, dataset: fwssDataset }
     cache.set(cacheKey, result, SUBGRAPH_TTL)
@@ -595,14 +638,20 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
 
 // GET /api/sp/:id/performance/timeline?hours=N — success % over time
 app.get("/api/sp/:id/performance/timeline", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const DEALBOT_METRICS = getDealbotMetrics(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const hours = validateHours(req.query.hours)
   const bucket = timeBucket(hours)
-  const cacheKey = `sp:${sp.id}:perf-timeline:${hours}`
+  const cacheKey = `sp:${sp.id}:perf-timeline:${hours}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
+
+  const networkFilter = network === "mainnet"
+    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
+    : ""
 
   try {
     const sql = `
@@ -616,7 +665,7 @@ app.get("/api/sp/:id/performance/timeline", async (req, res) => {
           AND dt > now() - INTERVAL ${hours} HOUR
           AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
           AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-          AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+          ${networkFilter}
         GROUP BY time, time_bucket, status, series_id
       ),
       storage_values AS (
@@ -643,7 +692,7 @@ app.get("/api/sp/:id/performance/timeline", async (req, res) => {
           AND dt > now() - INTERVAL ${hours} HOUR
           AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
           AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-          AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+          ${networkFilter}
         GROUP BY time, time_bucket, status, series_id
       ),
       ret_values AS (
@@ -683,14 +732,20 @@ app.get("/api/sp/:id/performance/timeline", async (req, res) => {
 
 // GET /api/sp/:id/performance/latency?hours=N — latency metrics over time
 app.get("/api/sp/:id/performance/latency", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const DEALBOT_METRICS = getDealbotMetrics(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const hours = validateHours(req.query.hours)
   const bucket = timeBucket(hours)
-  const cacheKey = `sp:${sp.id}:perf-latency:${hours}`
+  const cacheKey = `sp:${sp.id}:perf-latency:${hours}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
+
+  const networkFilter = network === "mainnet"
+    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
+    : ""
 
   try {
     const sql = `
@@ -702,7 +757,7 @@ app.get("/api/sp/:id/performance/latency", async (req, res) => {
       WHERE dt > now() - INTERVAL ${hours} HOUR
         AND name IN ('retrievalCheckMs_sum', 'ipfsRetrievalFirstByteMs_sum', 'ipniVerifyMs_sum')
         AND JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-        AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+        ${networkFilter}
         AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
       GROUP BY time, metric
       ORDER BY time ASC
@@ -722,7 +777,7 @@ app.get("/api/sp/:id/performance/latency", async (req, res) => {
 // 2. sum() across series to get total per time bucket
 // 3. lagInFrame to compute deltas between consecutive buckets
 // 4. greatest(delta, 0) to handle counter resets
-function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter) {
+function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter, metricsTable) {
   const ctFilter = checkTypeFilter
     ? `AND JSONExtract(tags, 'checkType', 'Nullable(String)') = '${checkTypeFilter}'`
     : ""
@@ -732,7 +787,7 @@ function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter) {
         if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
           JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
         avgMerge(value_avg) AS inner_value
-      FROM ${DEALBOT_METRICS}
+      FROM ${metricsTable}
       WHERE name = '${metricName}'
         AND dt > now() - INTERVAL ${hours} HOUR
         AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
@@ -762,9 +817,15 @@ function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter) {
 
 // GET /api/network/performance — bulk dealbot performance for all providers (72h for 200-sample SLA)
 app.get("/api/network/performance", async (req, res) => {
-  const cacheKey = "network:performance"
+  const network = parseNetwork(req)
+  const DEALBOT_METRICS = getDealbotMetrics(network)
+  const cacheKey = `network:performance:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
+
+  const networkFilter = network === "mainnet"
+    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
+    : ""
 
   try {
     function bulkDeltaSql(metricName, checkType, checkTypeFilter) {
@@ -782,7 +843,7 @@ app.get("/api/network/performance", async (req, res) => {
           WHERE name = '${metricName}'
             AND dt > now() - INTERVAL 72 HOUR
             AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
-            AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'
+            ${networkFilter}
             ${ctFilter}
           GROUP BY time, providerId, status, series_id
         ),
@@ -832,21 +893,27 @@ app.get("/api/network/performance", async (req, res) => {
 
 // GET /api/sp/:id/performance — dealbot Prometheus metrics (Better Stack infra_prod)
 app.get("/api/sp/:id/performance", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const DEALBOT_METRICS = getDealbotMetrics(network)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const hours = validateHours(req.query.hours)
-  const cacheKey = `sp:${sp.id}:performance:${hours}`
+  const cacheKey = `sp:${sp.id}:performance:${hours}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
+  const networkFilterClause = network === "mainnet"
+    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
+    : ""
+
   try {
     const provFilter = `JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
-      AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
+      ${networkFilterClause}`
 
     // Data Storage (deals) and Retrieval - separate metrics, matching Better Stack dashboard
-    const storageSql = dealbotDeltaSql("dataStorageStatus", hours, provFilter, null)
-    const retrievalSql = dealbotDeltaSql("retrievalStatus", hours, provFilter, "retrieval")
+    const storageSql = dealbotDeltaSql("dataStorageStatus", hours, provFilter, null, DEALBOT_METRICS)
+    const retrievalSql = dealbotDeltaSql("retrievalStatus", hours, provFilter, "retrieval", DEALBOT_METRICS)
 
     // Timing averages from _sum/_count gauge pairs
     const timingSql = `
@@ -907,7 +974,8 @@ app.get("/api/sp/:id/performance", async (req, res) => {
 
 // GET /api/sp/:id/logs?hours=N&level=X — raw logs
 app.get("/api/sp/:id/logs", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, logs: [] })
 
@@ -964,12 +1032,13 @@ app.get("/api/sp/:id/logs", async (req, res) => {
 
 // GET /api/sp/:id/errors?hours=N — top errors
 app.get("/api/sp/:id/errors", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, errors: [] })
 
   const hours = validateHours(req.query.hours)
-  const cacheKey = `sp:${sp.id}:errors:${hours}`
+  const cacheKey = `sp:${sp.id}:errors:${hours}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
@@ -1014,12 +1083,13 @@ app.get("/api/sp/:id/errors", async (req, res) => {
 
 // GET /api/sp/:id/patterns?hours=N — error patterns (grouped by message, no err field)
 app.get("/api/sp/:id/patterns", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, patterns: [] })
 
   const hours = validateHours(req.query.hours)
-  const cacheKey = `sp:${sp.id}:patterns:${hours}`
+  const cacheKey = `sp:${sp.id}:patterns:${hours}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 
@@ -1064,13 +1134,14 @@ app.get("/api/sp/:id/patterns", async (req, res) => {
 
 // GET /api/sp/:id/timeline?hours=N — error timeline
 app.get("/api/sp/:id/timeline", async (req, res) => {
-  const sp = getSP(req.params.id)
+  const network = parseNetwork(req)
+  const sp = getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, timeline: [] })
 
   const hours = validateHours(req.query.hours)
   const bucket = timeBucket(hours)
-  const cacheKey = `sp:${sp.id}:timeline:${hours}`
+  const cacheKey = `sp:${sp.id}:timeline:${hours}:${network}`
   const cached = cache.get(cacheKey)
   if (cached) return res.json(cached)
 

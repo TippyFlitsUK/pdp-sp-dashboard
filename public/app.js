@@ -4,9 +4,15 @@ var selectedPerfHours = 72
 var currentSP = null
 var currentTab = "overview"
 var spConfig = []
+var selectedNetwork = "mainnet"
 
 function getHours() {
   return selectedHours
+}
+
+function apiUrl(path) {
+  var sep = path.indexOf("?") === -1 ? "?" : "&"
+  return path + sep + "network=" + selectedNetwork
 }
 
 async function fetchJSON(url) {
@@ -124,7 +130,7 @@ function initRouter() {
       // Ensure spConfig is loaded (needed when landing directly on SP detail URL)
       if (!spConfig.length) {
         try {
-          spConfig = await fetchJSON("/api/network/overview")
+          spConfig = await fetchJSON(apiUrl("/api/network/overview"))
         } catch (e) {
           spConfig = []
         }
@@ -178,6 +184,20 @@ function initRouter() {
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
     if (currentSP) loadPerformance(currentSP)
+  })
+
+  // Network switcher
+  document.querySelector(".network-switcher").addEventListener("click", function(e) {
+    if (e.target.tagName !== "BUTTON") return
+    var net = e.target.dataset.network
+    if (!net || net === selectedNetwork) return
+    selectedNetwork = net
+    var btns = document.querySelectorAll(".net-btn")
+    btns.forEach(function(b) { b.classList.toggle("active", b.dataset.network === net) })
+    spConfig = []
+    currentSP = null
+    navigate("#overview")
+    loadOverview()
   })
 
   // Refresh button

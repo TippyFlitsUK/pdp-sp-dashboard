@@ -9,9 +9,9 @@ async function loadOverview() {
 
   try {
     var [global, providers, perfData] = await Promise.all([
-      fetchJSON("/api/network/global"),
-      fetchJSON("/api/network/overview"),
-      fetchJSON("/api/network/performance").catch(function() { return {} }),
+      fetchJSON(apiUrl("/api/network/global")),
+      fetchJSON(apiUrl("/api/network/overview")),
+      fetchJSON(apiUrl("/api/network/performance")).catch(function() { return {} }),
     ])
 
     renderStatsBar(statsBar, global)

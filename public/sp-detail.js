@@ -127,7 +127,7 @@ async function showDatasetModal(spId, setId) {
   modal.style.display = "flex"
 
   try {
-    var data = await fetchJSON("/api/sp/" + spId + "/dataset/" + setId)
+    var data = await fetchJSON(apiUrl("/api/sp/" + spId + "/dataset/" + setId))
     var pdp = data.pdp || {}
     var fwss = data.fwss || {}
     var faults = data.faults || []
@@ -218,7 +218,7 @@ async function showDatasetModal(spId, setId) {
 // ============================================================
 async function loadProving(sp) {
   try {
-    var data = await fetchJSON("/api/sp/" + sp.id + "/proving")
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/proving"))
     spDataCache.proving = data
 
     var prov = data.provider || {}
@@ -360,7 +360,7 @@ async function loadProving(sp) {
 // ============================================================
 async function loadEconomics(sp) {
   try {
-    var data = await fetchJSON("/api/sp/" + sp.id + "/economics")
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/economics"))
     spDataCache.economics = data
     var s = data.summary || {}
 
@@ -488,7 +488,7 @@ async function showRailModal(spId, railId) {
   modal.style.display = "flex"
 
   try {
-    var data = await fetchJSON("/api/sp/" + spId + "/rail/" + railId)
+    var data = await fetchJSON(apiUrl("/api/sp/" + spId + "/rail/" + railId))
     var r = data.rail || {}
     var ds = data.dataset
     var stateClass = r.state === "ACTIVE" ? "active" : r.state === "TERMINATED" ? "terminated" : r.state === "FINALIZED" ? "finalized" : "zerorate"
@@ -573,7 +573,7 @@ async function showRailModal(spId, railId) {
 // Revenue chart (loaded async, non-blocking)
 async function loadRevenue(sp) {
   try {
-    var data = await fetchJSON("/api/sp/" + sp.id + "/revenue")
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/revenue"))
     if (!data || !data.length) return
 
     // Build cumulative series
@@ -621,7 +621,7 @@ async function loadRevenue(sp) {
 async function loadPerformance(sp) {
   try {
     setLoading("performance-content", "Loading performance data")
-    var data = await fetchJSON("/api/sp/" + sp.id + "/performance?hours=" + selectedPerfHours)
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/performance?hours=" + selectedPerfHours))
     spDataCache.performance = data
     if (!data.available) { setNoData("performance-content", "No performance data for this SP"); return }
     var counters = data.counters || []
@@ -724,7 +724,7 @@ async function loadPerfTimeline(sp) {
   try {
     var container = document.getElementById("perf-chart-container")
     if (container) container.innerHTML = '<div class="loading">Loading chart</div>'
-    var data = await fetchJSON("/api/sp/" + sp.id + "/performance/timeline?hours=" + selectedPerfHours)
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/performance/timeline?hours=" + selectedPerfHours))
     if (!data || !data.length) {
       if (container) container.innerHTML = '<canvas id="perf-chart-canvas"></canvas>'
       return
@@ -773,7 +773,7 @@ async function loadPerfLatency(sp) {
   try {
     var container = document.getElementById("latency-chart-container")
     if (container) container.innerHTML = '<div class="loading">Loading chart</div>'
-    var data = await fetchJSON("/api/sp/" + sp.id + "/performance/latency?hours=" + selectedPerfHours)
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/performance/latency?hours=" + selectedPerfHours))
     if (!data || !data.length) {
       if (container) container.innerHTML = '<canvas id="latency-chart-canvas"></canvas>'
       return
@@ -955,7 +955,7 @@ async function loadSPTimeline(sp) {
   try {
     var container = document.getElementById("timeline-container")
     if (container) container.innerHTML = '<div class="loading">Loading chart</div>'
-    var data = await fetchJSON("/api/sp/" + sp.id + "/timeline?hours=" + getHours())
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/timeline?hours=" + getHours()))
     if (container) container.innerHTML = '<canvas id="timeline-canvas"></canvas>'
     if (!data.available) return
     var timeline = data.timeline || []
@@ -992,7 +992,7 @@ async function loadSPTimeline(sp) {
 async function loadSPErrors(sp) {
   try {
     setLoading("errors-content", "Loading top issues")
-    var data = await fetchJSON("/api/sp/" + sp.id + "/errors?hours=" + getHours())
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/errors?hours=" + getHours()))
     if (!data.available) { setNoData("errors-content", "Logs not available"); return }
     var errors = data.errors || []
     var html = sectionHeading("Top Issues")
@@ -1041,7 +1041,7 @@ async function loadSPErrors(sp) {
 async function loadSPPatterns(sp) {
   try {
     setLoading("patterns-content", "Loading error patterns")
-    var data = await fetchJSON("/api/sp/" + sp.id + "/patterns?hours=" + getHours())
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/patterns?hours=" + getHours()))
     if (!data.available) { setNoData("patterns-content", "Logs not available"); return }
     var patterns = data.patterns || []
     var html = sectionHeading("Error Patterns")
@@ -1094,7 +1094,7 @@ async function loadSPLogs(sp) {
   var levelParam = level ? "&level=" + level : ""
   try {
     setLoading("logs-content", "Loading recent logs")
-    var data = await fetchJSON("/api/sp/" + sp.id + "/logs?hours=" + getHours() + levelParam)
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/logs?hours=" + getHours() + levelParam))
     if (!data.available) { setNoData("logs-content", "Logs not available"); return }
     var logs = data.logs || []
     var currentLevel = document.getElementById("log-level-filter") ? document.getElementById("log-level-filter").value : ""
