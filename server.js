@@ -9,6 +9,7 @@ const {
   RECENT_TABLE, HISTORICAL_TABLE, COMMON_COLS, SUPPRESS_FILTER, CID_CONTACT_FILTER,
 } = require("./lib/betterstack")
 const { startLivenessProbes, getLiveness } = require("./lib/liveness")
+const { getDataSetInfoBatch, getWalletBalances } = require("./lib/fwss")
 
 const app = express()
 const PORT = parseInt(process.env.PORT, 10) || 3848
@@ -236,6 +237,7 @@ app.get("/api/network/overview", async (req, res) => {
         name: sp.name,
         address: sp.address,
         hasLogs: sp.hasLogs,
+        endorsed: sp.endorsed || false,
         liveness: liveness[sp.id] || null,
         pdp,
         economics: rails ? {
@@ -420,7 +422,7 @@ app.get("/api/sp/:id/economics", async (req, res) => {
 
   try {
     const addr = sp.address.toLowerCase()
-    const [rails, accountData] = await Promise.all([
+    const [rails, accountData, walletBalances] = await Promise.all([
       gqlPaginate(endpoints.filecoinPay, "rails", `
         railId
         paymentRate
@@ -444,6 +446,8 @@ app.get("/api/sp/:id/economics", async (req, res) => {
           token { symbol decimals }
         }
       }`).catch(() => ({ userTokens: [] })),
+
+      getWalletBalances(addr, network).catch(() => null),
     ])
 
     // Sum totalSettledAmount directly from rails
@@ -471,6 +475,7 @@ app.get("/api/sp/:id/economics", async (req, res) => {
         totalRails: rails.length,
         totalSettled: totalSettled.toString(),
       },
+      wallet: walletBalances,
     }
 
     cache.set(cacheKey, result, SUBGRAPH_TTL)
@@ -540,6 +545,193 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
   }
 })
 
+
+// GET /api/sp/:id/activity?hours=N — per-dataset activity analysis (addPieces volume, revenue cross-ref)
+app.get("/api/sp/:id/activity", async (req, res) => {
+  const network = parseNetwork(req)
+  const endpoints = getEndpoints(network)
+  const sp = getSP(req.params.id, network)
+  if (!sp) return res.status(404).json({ error: "Unknown SP" })
+
+  const hours = validateHours(req.query.hours)
+  const cacheKey = `sp:${sp.id}:activity:${hours}:${network}`
+  const cached = getCached(req, cacheKey)
+  if (cached) return res.json(cached)
+
+  try {
+    const addr = sp.address.toLowerCase()
+    const cutoff = Math.floor(Date.now() / 1000) - (hours * 3600)
+
+    // Parallel: datasets, recent addPieces txs, recent roots (data size), weekly activity, FilecoinPay rails
+    const [dataSets, recentTxs, recentRoots, weeklyActivity, rails] = await Promise.all([
+      gqlPaginate(endpoints.pdpScan, "dataSets", `
+        setId totalRoots totalDataSize totalTransactions totalFeePaid
+        createdAt updatedAt isActive
+      `, `owner: "${addr}"`, "setId"),
+
+      // Recent transactions — paginate using createdAt cursor to avoid skip limit
+      (async () => {
+        let all = []
+        let cursor = cutoff
+        const pageSize = 1000
+        for (let i = 0; i < 20; i++) {
+          const data = await gqlFetch(endpoints.pdpScan, `{
+            transactions(first: ${pageSize}, orderBy: createdAt, orderDirection: asc,
+              where: {proofSet_: {owner: "${addr}"}, createdAt_gt: "${cursor}", method: "addPieces"}) {
+              dataSetId createdAt
+            }
+          }`)
+          const items = data.transactions || []
+          all.push(...items)
+          if (items.length < pageSize) break
+          cursor = items[items.length - 1].createdAt
+        }
+        return all
+      })(),
+
+      // Recent roots — paginate to sum actual data size added per dataset
+      (async () => {
+        let all = []
+        let cursor = cutoff
+        const pageSize = 1000
+        for (let i = 0; i < 20; i++) {
+          const data = await gqlFetch(endpoints.pdpScan, `{
+            roots(first: ${pageSize}, orderBy: createdAt, orderDirection: asc,
+              where: {proofSet_: {owner: "${addr}"}, createdAt_gt: "${cursor}"}) {
+              setId rawSize createdAt
+            }
+          }`)
+          const items = data.roots || []
+          all.push(...items)
+          if (items.length < pageSize) break
+          cursor = items[items.length - 1].createdAt
+        }
+        return all
+      })(),
+
+      // Weekly proof set activity for all SP datasets (last 12 weeks)
+      gqlPaginate(endpoints.pdpScan, "weeklyProofSetActivities", `
+        id dataSetId totalRootsAdded totalDataSizeAdded totalProofs totalFaultedPeriods
+      `, `proofSet_: {owner: "${addr}"}`, "id"),
+
+      // FilecoinPay rails for revenue cross-reference
+      gqlPaginate(endpoints.filecoinPay, "rails", `
+        railId paymentRate state payer { id } totalSettledAmount totalSettlements createdAt
+      `, `payee: "${addr}"`, "railId"),
+    ])
+
+    // Sum recent data size per dataset from actual roots
+    const recentSizeByDataset = {}
+    for (const root of recentRoots) {
+      const dsId = root.setId
+      recentSizeByDataset[dsId] = (recentSizeByDataset[dsId] || 0n) + BigInt(root.rawSize || 0)
+    }
+
+    // Count addPieces per dataset and build timeline buckets
+    const txByDataset = {}
+    const timelineBuckets = {}
+    // Bucket size: <=6h -> 15min, <=24h -> 1h, <=72h -> 3h, else 6h
+    const bucketSec = hours <= 6 ? 900 : hours <= 24 ? 3600 : hours <= 72 ? 10800 : 21600
+    for (const tx of recentTxs) {
+      txByDataset[tx.dataSetId] = (txByDataset[tx.dataSetId] || 0) + 1
+      const bucket = Math.floor(Number(tx.createdAt) / bucketSec) * bucketSec
+      const key = `${bucket}:${tx.dataSetId}`
+      timelineBuckets[key] = (timelineBuckets[key] || 0) + 1
+    }
+    // Convert to array: [{time, dataSetId, count}]
+    const timeline = Object.entries(timelineBuckets).map(([key, count]) => {
+      const [time, dataSetId] = key.split(":")
+      return { time: Number(time), dataSetId, count }
+    })
+
+    // Parse weekly activity into per-dataset arrays
+    const weeklyByDataset = {}
+    for (const w of weeklyActivity) {
+      const dsId = w.dataSetId
+      if (!weeklyByDataset[dsId]) weeklyByDataset[dsId] = []
+      weeklyByDataset[dsId].push(w)
+    }
+
+    // Index rails by railId for fast lookup
+    const railById = {}
+    for (const r of rails) {
+      railById[r.railId] = r
+    }
+
+    // Only fetch FWSS data for datasets with activity (saves RPC calls)
+    const activeSetIds = Object.keys(txByDataset)
+    const fwssData = activeSetIds.length > 0
+      ? await getDataSetInfoBatch(activeSetIds, network)
+      : {}
+
+    // Build per-dataset activity with FWSS cross-references
+    let datasets = dataSets.map(ds => {
+      const dsId = ds.setId
+      const recentTxCount = txByDataset[dsId] || 0
+      const weekly = (weeklyByDataset[dsId] || [])
+        .sort((a, b) => a.id > b.id ? -1 : 1)
+        .slice(0, 12)
+
+      const fwss = fwssData[dsId] || null
+      const client = fwss?.payer || null
+      const pdpRailId = fwss?.pdpRailId || null
+      const appMetadata = fwss?.appMetadata || null
+
+      // Find linked rail via FWSS pdpRailId
+      let dailyRevenue = 0
+      let railState = null
+      if (pdpRailId && railById[String(pdpRailId)]) {
+        const rail = railById[String(pdpRailId)]
+        railState = rail.state
+        if (rail.state === "ACTIVE" && rail.paymentRate !== "0") {
+          dailyRevenue = (Number(rail.paymentRate) / 1e18) * 2880
+        }
+      }
+
+      const hasData = Number(ds.totalRoots || 0) > 0 || ds.totalDataSize !== "0"
+
+      return {
+        setId: dsId,
+        status: hasData ? "Active" : "Terminated",
+        totalRoots: ds.totalRoots,
+        totalDataSize: ds.totalDataSize,
+        totalTransactions: ds.totalTransactions,
+        totalFeePaid: ds.totalFeePaid,
+        createdAt: ds.createdAt,
+        updatedAt: ds.updatedAt,
+        recentAddPieces: recentTxCount,
+        recentDataSize: (recentSizeByDataset[dsId] || 0n).toString(),
+        client,
+        appMetadata,
+        pdpRailId,
+        railState,
+        dailyRevenue,
+        weeklyActivity: weekly,
+      }
+    })
+
+    // Filter to only datasets with activity in the period, sort by most active
+    datasets = datasets.filter(ds => ds.recentAddPieces > 0)
+    datasets.sort((a, b) => b.recentAddPieces - a.recentAddPieces)
+
+    const totalRecentTx = recentTxs.length
+    const truncated = recentTxs.length >= 20000
+
+    const result = {
+      datasets,
+      totalRecentAddPieces: totalRecentTx,
+      truncated,
+      hours,
+      timeline,
+    }
+
+    cache.set(cacheKey, result, SUBGRAPH_TTL)
+    res.json(result)
+  } catch (err) {
+    console.error(`sp/${sp.id}/activity error:`, err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
 
 // Dealbot counter delta SQL — matches Better Stack dashboard pattern exactly:
 // 1. avgMerge(value_avg) grouped by series_id to get per-pod values
@@ -705,7 +897,6 @@ app.get("/api/sp/:id/performance", async (req, res) => {
       FORMAT JSONEachRow`
 
     const bucket = timeBucket(hours)
-    const networkFilter = networkFilterClause
 
     // Timeline SQL (success/fail over time)
     const timelineSql = `
@@ -943,6 +1134,62 @@ app.get("/api/sp/:id/errors", async (req, res) => {
   }
 })
 
+// GET /api/sp/:id/error-detail?hours=N&msg=X — individual occurrences of a grouped error
+app.get("/api/sp/:id/error-detail", async (req, res) => {
+  const network = parseNetwork(req)
+  const sp = getSP(req.params.id, network)
+  if (!sp) return res.status(404).json({ error: "Unknown SP" })
+  if (!sp.hasLogs) return res.json({ available: false, entries: [] })
+
+  const hours = validateHours(req.query.hours)
+  const msg = req.query.msg
+  if (!msg) return res.status(400).json({ error: "msg parameter required" })
+
+  // No caching — these are drill-down queries
+  try {
+    // Escape single quotes for ClickHouse
+    const escapedMsg = msg.replace(/'/g, "''")
+    const sql = `
+      SELECT
+        dt,
+        JSONExtract(raw, 'level', 'Nullable(String)') AS level,
+        JSONExtract(raw, 'logger', 'Nullable(String)') AS logger,
+        JSONExtract(raw, 'msg', 'Nullable(String)') AS msg,
+        JSONExtract(raw, 'err', 'Nullable(String)') AS err,
+        JSONExtract(raw, 'errorVerbose', 'Nullable(String)') AS errorVerbose,
+        JSONExtract(raw, 'taskID', 'Nullable(Int64)') AS taskID,
+        JSONExtract(raw, 'type', 'Nullable(String)') AS taskType,
+        JSONExtract(raw, 'id', 'Nullable(Int64)') AS taskIdField,
+        JSONExtract(raw, 'caller', 'Nullable(String)') AS caller,
+        JSONExtract(raw, 'piece_cid', 'Nullable(String)') AS piece_cid
+      FROM (
+        SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
+        WHERE dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') = '${sp.clientId}'
+          AND JSONExtract(raw, 'msg', 'Nullable(String)') = '${escapedMsg}'
+          AND JSONExtract(raw, 'level', 'Nullable(String)') IN ('error', 'warn')
+          ${SUPPRESS_FILTER}
+        UNION ALL
+        SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
+        WHERE _row_type = 1
+          AND dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') = '${sp.clientId}'
+          AND JSONExtract(raw, 'msg', 'Nullable(String)') = '${escapedMsg}'
+          AND JSONExtract(raw, 'level', 'Nullable(String)') IN ('error', 'warn')
+          ${SUPPRESS_FILTER}
+      )
+      ORDER BY dt DESC
+      LIMIT 20
+      FORMAT JSONEachRow`
+
+    const rows = await queryBetterStack(sql)
+    res.json({ available: true, entries: rows })
+  } catch (err) {
+    console.error(`sp/${sp.id}/error-detail error:`, err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // GET /api/sp/:id/patterns?hours=N — error patterns (grouped by message, no err field)
 app.get("/api/sp/:id/patterns", async (req, res) => {
   const network = parseNetwork(req)
@@ -1058,18 +1305,37 @@ async function prewarm(network) {
   console.log(`Prewarm ${network}: done`)
 }
 
+// Prewarm FWSS cache — fetch all dataset IDs from PDP Scan and pre-populate client mappings
+async function prewarmFWSS() {
+  try {
+    const endpoints = getEndpoints("mainnet")
+    const dataSets = await gqlPaginate(endpoints.pdpScan, "dataSets", "setId", "", "setId")
+    const ids = dataSets.map(ds => ds.setId)
+    console.log(`FWSS prewarm: fetching ${ids.length} datasets...`)
+    await getDataSetInfoBatch(ids, "mainnet")
+    console.log(`FWSS prewarm: done (${ids.length} datasets cached)`)
+  } catch (err) {
+    console.error("FWSS prewarm error:", err.message)
+  }
+}
+
 function startPrewarm() {
   // Initial prewarm after 2s (let server start first)
   setTimeout(() => {
     prewarm("mainnet")
     prewarm("calibration")
+    prewarmFWSS()
   }, 2000)
 
-  // Repeat every 5 min
+  // Repeat every 5 min (network), 30 min (FWSS — matches FWSS cache TTL)
   const interval = setInterval(() => {
     prewarm("mainnet")
     prewarm("calibration")
   }, 5 * 60 * 1000)
+  const fwssInterval = setInterval(() => {
+    prewarmFWSS()
+  }, 30 * 60 * 1000)
+  fwssInterval.unref()
   interval.unref()
 }
 

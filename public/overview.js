@@ -88,7 +88,7 @@ function renderSPGrid(container, providers, perfData) {
         '<span class="sp-period">72h</span>' +
         '<span class="sp-addr" title="Click to copy" data-addr="' + escapeHtml(sp.address) + '">' + escapeHtml(sp.address) + '</span>' +
       '</div>' +
-      '<span class="sp-id">ID ' + sp.id + '</span>' +
+      '<div style="display:flex;align-items:center;gap:6px">' + (sp.endorsed ? '<span class="badge endorsed">ENDORSED</span>' : '') + '<span class="sp-id">ID ' + sp.id + '</span></div>' +
     '</div>'
 
     // Performance only
@@ -129,17 +129,14 @@ function renderSPGrid(container, providers, perfData) {
     el.addEventListener("click", function(e) {
       e.stopPropagation()
       var addr = el.dataset.addr
-      var ta = document.createElement("textarea")
-      ta.value = addr
-      ta.style.position = "fixed"
-      ta.style.opacity = "0"
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand("copy")
-      document.body.removeChild(ta)
       var orig = el.textContent
-      el.textContent = "Copied!"
-      setTimeout(function() { el.textContent = orig }, 1000)
+      navigator.clipboard.writeText(addr).then(function() {
+        el.textContent = "Copied!"
+        setTimeout(function() { el.textContent = orig }, 1000)
+      }).catch(function() {
+        el.textContent = "Copy failed"
+        setTimeout(function() { el.textContent = orig }, 1000)
+      })
     })
   })
 }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <title>PDP SP Dashboard</title>
-  <link rel="stylesheet" href="style.css?v=27">
+  <link rel="stylesheet" href="style.css?v=47">
 </head>
 <body>
   <header>
@@ -44,9 +44,27 @@
       <!-- Tab navigation -->
       <div class="detail-tabs" id="detail-tabs">
         <button class="detail-tab active" data-tab="performance">Performance</button>
+        <button class="detail-tab" data-tab="activity">Activity</button>
         <button class="detail-tab" data-tab="proving">Proving & Storage</button>
         <button class="detail-tab" data-tab="economics">Economics</button>
         <button class="detail-tab" data-tab="logs">Logs</button>
+      </div>
+
+      <!-- Tab: Activity -->
+      <div class="tab-content" id="tab-activity" style="display:none">
+        <div class="panel" id="panel-activity">
+          <div class="detail-header">
+            <h3>Activity</h3>
+            <div class="time-range-btns" id="activity-time-range-btns">
+              <button data-hours="1">1h</button>
+              <button data-hours="6">6h</button>
+              <button data-hours="24" class="active">24h</button>
+              <button data-hours="72">72h</button>
+              <button data-hours="168">7d</button>
+            </div>
+          </div>
+          <div id="activity-content"></div>
+        </div>
       </div>
 
       <!-- Tab: Proving -->
@@ -73,8 +91,8 @@
             <div class="time-range-btns" id="perf-time-range-btns">
               <button data-hours="1">1h</button>
               <button data-hours="6">6h</button>
-              <button data-hours="24" class="active">24h</button>
-              <button data-hours="72">72h</button>
+              <button data-hours="24">24h</button>
+              <button data-hours="72" class="active">72h</button>
               <button data-hours="168">7d</button>
             </div>
           </div>
@@ -153,8 +171,9 @@
     </div>
   </div>
 
-  <script src="app.js?v=27"></script>
-  <script src="overview.js?v=27"></script>
-  <script src="sp-detail.js?v=27"></script>
+  <script src="app.js?v=47"></script>
+  <script src="overview.js?v=47"></script>
+  <script src="sp-detail.js?v=47"></script>
+  <script src="activity.js?v=47"></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 // Shared state and helpers
 var selectedHours = 24
-var selectedPerfHours = 24
+var selectedPerfHours = 72
+var selectedActivityHours = 24
 var currentSP = null
 var currentTab = "overview"
 var spConfig = []
@@ -77,8 +78,9 @@ function formatWei(wei) {
 
 function timeAgo(dt) {
   if (!dt) return "N/A"
+  var s = String(dt)
   var now = Date.now()
-  var then = new Date(dt + (dt.includes("Z") ? "" : "Z")).getTime()
+  var then = new Date(s + (s.includes("Z") ? "" : "Z")).getTime()
   var mins = Math.floor((now - then) / 60000)
   if (mins < 1) return "just now"
   if (mins < 60) return mins + "m ago"
@@ -89,7 +91,8 @@ function timeAgo(dt) {
 
 function formatTime(dt) {
   if (!dt) return "-"
-  var d = new Date(dt + (dt.includes("Z") ? "" : "Z"))
+  var s = String(dt)
+  var d = new Date(s + (s.includes("Z") ? "" : "Z"))
   return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
@@ -185,6 +188,18 @@ function initRouter() {
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
     if (currentSP) { spDataCache.performance = null; loadPerformance(currentSP) }
+  })
+
+  // Activity time range buttons
+  document.getElementById("activity-time-range-btns").addEventListener("click", function(e) {
+    if (e.target.tagName !== "BUTTON") return
+    var hours = parseInt(e.target.dataset.hours, 10)
+    if (!hours) return
+    selectedActivityHours = hours
+    var btns = document.querySelectorAll("#activity-time-range-btns button")
+    btns.forEach(function(b) { b.classList.remove("active") })
+    e.target.classList.add("active")
+    if (currentSP) { spDataCache.activity = null; loadActivity(currentSP) }
   })
 
   // Network switcher

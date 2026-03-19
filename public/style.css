@@ -578,6 +578,7 @@ td.level-info { color: var(--accent); }
 .badge.terminated { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255, 77, 106, 0.2); }
 .badge.finalized { background: rgba(167, 139, 250, 0.12); color: #a78bfa; border: 1px solid rgba(167, 139, 250, 0.2); }
 .badge.zerorate { background: var(--amber-dim); color: var(--amber); border: 1px solid rgba(255, 176, 32, 0.2); }
+.badge.endorsed { background: var(--amber-dim); color: var(--amber); border: 1px solid rgba(255, 176, 32, 0.2); font-size: 10px; vertical-align: middle; }
 
 /* ===== LOADING / ERROR ===== */
 .loading {

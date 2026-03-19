@@ -5,6 +5,7 @@ var spDataCache = {}
 async function loadSPDetail(sp) {
   var titleEl = document.getElementById("detail-title")
   titleEl.innerHTML = sp.name + ' (ID ' + sp.id + ')' +
+    (sp.endorsed ? ' <span class="badge endorsed" style="margin-left:8px">ENDORSED</span>' : '') +
     (sp.curioVersion ? '<span class="detail-version">' + escapeHtml(sp.curioVersion) + '</span>' : '')
   spDataCache = {}
 
@@ -23,6 +24,7 @@ async function loadSPDetail(sp) {
   setLoading("proving-content", "Loading proving data")
   setLoading("economics-content", "Loading economics data")
   setLoading("performance-content", "Loading performance data")
+  setLoading("activity-content", "Loading activity data")
   if (sp.hasLogs) {
     document.getElementById("errors-content").innerHTML = ""
     document.getElementById("logs-content").innerHTML = ""
@@ -38,6 +40,8 @@ async function loadSPDetail(sp) {
 async function loadTabData(tab, sp) {
   if (tab === "performance" && !spDataCache.performance) {
     await loadPerformance(sp)
+  } else if (tab === "activity" && !spDataCache.activity) {
+    await loadActivity(sp)
   } else if (tab === "proving" && !spDataCache.proving) {
     await loadProving(sp)
   } else if (tab === "economics" && !spDataCache.economics) {
@@ -136,6 +140,20 @@ async function showDatasetModal(spId, setId) {
     var created = pdp.createdAt ? formatTime(new Date(Number(pdp.createdAt) * 1000).toISOString()) : '-'
     var updated = pdp.updatedAt ? formatTime(new Date(Number(pdp.updatedAt) * 1000).toISOString()) : '-'
 
+    // Check activity cache for FWSS client data
+    var clientAddr = null
+    var pdpRailId = null
+    if (spDataCache.activity && spDataCache.activity.datasets) {
+      for (var ai = 0; ai < spDataCache.activity.datasets.length; ai++) {
+        var ads = spDataCache.activity.datasets[ai]
+        if (String(ads.setId) === String(setId)) {
+          clientAddr = ads.client
+          pdpRailId = ads.pdpRailId
+          break
+        }
+      }
+    }
+
     var html = '<div class="dataset-detail-grid">'
 
     // Identity & Status
@@ -143,6 +161,8 @@ async function showDatasetModal(spId, setId) {
       '<h4>Identity & Status</h4>' +
       '<div class="dd-row"><span>Status</span><span class="badge ' + statusClass + '">' + status + '</span></div>' +
       '<div class="dd-row"><span>Data Set ID</span><span>' + setId + '</span></div>' +
+      (clientAddr ? '<div class="dd-row"><span>Client</span><span class="copy-addr" style="cursor:pointer;font-size:11px" title="Click to copy" data-copy="' + escapeHtml(clientAddr) + '">' + escapeHtml(clientAddr) + '</span></div>' : '') +
+      (pdpRailId ? '<div class="dd-row"><span>PDP Rail</span><span>#' + pdpRailId + '</span></div>' : '') +
       '<div class="dd-row"><span>Created</span><span>' + created + '</span></div>' +
       '<div class="dd-row"><span>Last Updated</span><span>' + updated + '</span></div>' +
     '</div>'
@@ -181,6 +201,18 @@ async function showDatasetModal(spId, setId) {
 
     html += '</div>'
     body.innerHTML = html
+
+    // Wire copy-to-clipboard via delegation (avoids inline onclick XSS risk)
+    body.querySelectorAll(".copy-addr[data-copy]").forEach(function(el) {
+      el.addEventListener("click", function() {
+        var val = el.dataset.copy
+        var orig = el.textContent
+        navigator.clipboard.writeText(val).then(function() {
+          el.textContent = "Copied!"
+          setTimeout(function() { el.textContent = orig }, 1500)
+        })
+      })
+    })
   } catch (err) {
     body.innerHTML = '<div class="error-banner">' + escapeHtml(err.message) + '</div>'
   }
@@ -210,7 +242,7 @@ async function loadProving(sp) {
     if (latestWeek) {
       var wp = Number(latestWeek.totalProofs || 0)
       var wf = Number(latestWeek.totalFaultedPeriods || 0)
-      lastSuccess = wp > 0 ? (((wp - wf) / wp) * 100).toFixed(2) + "%" : "100.00%"
+      lastSuccess = wp > 0 ? (((wp - wf) / wp) * 100).toFixed(2) + "%" : "N/A"
     }
 
     var html = summaryGrid([
@@ -353,14 +385,18 @@ async function loadEconomics(sp) {
     var totalSettled = Number(acct.fundsCollected || 0) / 1e18
     var totalRevenue = totalSettled + expectedSettlement
 
+    var wallet = data.wallet || {}
+
     var html = summaryGrid([
       { label: "Active Rails", value: formatNum(s.activeRails) },
       { label: "Total Rails", value: formatNum(s.totalRails) },
       { label: "Expected Settlement", value: "$" + expectedSettlement.toFixed(2), cls: "green" },
+      { label: "FIL Balance", value: wallet.fil != null ? wallet.fil.toFixed(4) + " FIL" : "--" },
     ]) + summaryGrid([
       { label: "Total Settled", value: "$" + totalSettled.toFixed(2), cls: "amber" },
       { label: "Total Revenue", value: "$" + totalRevenue.toFixed(2) },
       { label: "Last Settlement", value: acct.lastSettled ? formatTime(new Date(Number(acct.lastSettled) * 1000).toISOString()) : '-' },
+      { label: "USDFC Balance", value: wallet.usdfc != null ? "$" + wallet.usdfc.toFixed(4) : "--" },
     ])
 
     if (data.rails && data.rails.length > 0) {
@@ -845,10 +881,11 @@ function showLogModal(type, index) {
   if (type === "issue") {
     item = logDataCache.errors[index]
     if (!item) return
-    title.textContent = "Issue Detail"
+    title.textContent = "Issue Detail (" + formatNum(item.cnt) + " occurrences)"
+    // Show summary while loading full details
     html = '<div class="dataset-detail-grid">' +
       '<div class="dd-section">' +
-        '<h4>Details</h4>' +
+        '<h4>Summary</h4>' +
         '<div class="dd-row"><span>Level</span><span class="level-' + (item.level || "") + '">' + (item.level || "-") + '</span></div>' +
         '<div class="dd-row"><span>Logger</span><span>' + escapeHtml(item.logger || "-") + '</span></div>' +
         '<div class="dd-row"><span>Count</span><span>' + formatNum(item.cnt) + '</span></div>' +
@@ -858,11 +895,46 @@ function showLogModal(type, index) {
         '<h4>Message</h4>' +
         '<div style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--text-secondary);word-break:break-all;white-space:pre-wrap">' + escapeHtml(item.msg || "-") + '</div>' +
       '</div>' +
-      (item.err ? '<div class="dd-section" style="grid-column:1/-1">' +
-        '<h4>Error</h4>' +
-        '<div style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--red);word-break:break-all;white-space:pre-wrap">' + escapeHtml(item.err) + '</div>' +
-      '</div>' : '') +
-    '</div>'
+    '</div>' +
+    '<div id="issue-detail-entries"><div class="loading">Loading full details</div></div>'
+    body.innerHTML = html
+    modal.style.display = "flex"
+    // Fetch individual occurrences
+    fetchJSON(apiUrl("/api/sp/" + currentSP.id + "/error-detail?hours=" + getHours() + "&msg=" + encodeURIComponent(item.msg || "")))
+      .then(function(data) {
+        var el = document.getElementById("issue-detail-entries")
+        if (!el) return
+        var entries = (data && data.entries) || []
+        if (!entries.length) { el.innerHTML = '<div class="no-data">No individual entries found</div>'; return }
+        var out = '<h4 style="font-size:11px;color:var(--text-muted);margin:16px 0 8px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500">Individual Occurrences (' + entries.length + ')</h4>'
+        for (var i = 0; i < entries.length; i++) {
+          var e = entries[i]
+          var d = new Date(e.dt + (e.dt.includes("Z") ? "" : "Z"))
+          out += '<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;background:var(--bg-secondary)">'
+          out += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;font-size:12px">'
+          out += '<span style="color:var(--text-muted)">' + d.toLocaleString() + '</span>'
+          if (e.taskType) out += '<span>Task: <b>' + escapeHtml(e.taskType) + '</b></span>'
+          if (e.taskID || e.taskIdField) out += '<span>ID: ' + (e.taskID || e.taskIdField) + '</span>'
+          if (e.caller) out += '<span style="color:var(--text-muted)">' + escapeHtml(e.caller) + '</span>'
+          if (e.piece_cid) out += '<span>Piece: ' + escapeHtml(e.piece_cid) + '</span>'
+          out += '</div>'
+          if (e.err) {
+            out += '<div style="font-family:JetBrains Mono,monospace;font-size:11px;color:var(--red);white-space:pre-wrap;word-break:break-all;margin-bottom:4px">' + escapeHtml(e.err) + '</div>'
+          }
+          if (e.errorVerbose) {
+            out += '<details open style="margin-top:4px"><summary style="font-size:11px;color:var(--text-muted);cursor:pointer">Stack Trace</summary>'
+            out += '<div style="font-family:JetBrains Mono,monospace;font-size:11px;color:var(--text-muted);white-space:pre-wrap;word-break:break-all;margin-top:4px">' + escapeHtml(e.errorVerbose) + '</div>'
+            out += '</details>'
+          }
+          out += '</div>'
+        }
+        el.innerHTML = out
+      })
+      .catch(function(err) {
+        var el = document.getElementById("issue-detail-entries")
+        if (el) el.innerHTML = '<div class="error-banner">' + escapeHtml(err.message) + '</div>'
+      })
+    return
   } else if (type === "pattern") {
     item = logDataCache.patterns[index]
     if (!item) return
