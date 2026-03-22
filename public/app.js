@@ -174,7 +174,7 @@ function initRouter() {
     e.target.classList.add("active")
     if (currentSP && currentSP.hasLogs) {
       spDataCache.logs = false
-      Promise.all([loadSPTimeline(currentSP), loadSPErrors(currentSP), loadSPPatterns(currentSP), loadSPLogs(currentSP)]).catch(function() {})
+      Promise.all([loadLogsSummary(currentSP), loadSPTimeline(currentSP), loadSPErrors(currentSP), loadSPPatterns(currentSP), loadSPLogs(currentSP)]).catch(function() {})
     }
   })
 
@@ -212,8 +212,14 @@ function initRouter() {
     btns.forEach(function(b) { b.classList.toggle("active", b.dataset.network === net) })
     spConfig = []
     currentSP = null
-    history.replaceState(null, "", "/")
-    loadOverview()
+    spDataCache = {}
+    if (window.location.hash && window.location.hash !== "#") {
+      window.location.hash = ""
+    } else {
+      document.getElementById("section-overview").style.display = "block"
+      document.getElementById("section-detail").style.display = "none"
+      loadOverview()
+    }
   })
 
   // Refresh button
@@ -228,12 +234,15 @@ function initRouter() {
 
   // Back button
   document.getElementById("back-btn").addEventListener("click", function() {
-    history.replaceState(null, "", "/")
-    document.getElementById("section-overview").style.display = "block"
-    document.getElementById("section-detail").style.display = "none"
-    currentSP = null
-    currentTab = "overview"
-    loadOverview()
+    if (window.location.hash && window.location.hash !== "#") {
+      window.location.hash = ""
+    } else {
+      document.getElementById("section-overview").style.display = "block"
+      document.getElementById("section-detail").style.display = "none"
+      currentSP = null
+      currentTab = "overview"
+      loadOverview()
+    }
   })
 
   // Tab clicks
@@ -546,6 +555,17 @@ function wireSortable(tableId) {
       rows.forEach(function(r) { tbody.appendChild(r) })
     })
   })
+}
+
+// Summary grid helper (shared across overview + sp-detail)
+function summaryGrid(items) {
+  return '<div class="summary-grid">' + items.map(function(item) {
+    var clickable = item.tab ? ' clickable" onclick="switchTab(\'' + item.tab + '\')"' : '"'
+    return '<div class="sg-card' + clickable + '>' +
+      '<div class="stat-label">' + item.label + '</div>' +
+      '<div class="stat-value ' + (item.cls || '') + '">' + item.value + '</div>' +
+    '</div>'
+  }).join("") + '</div>'
 }
 
 // Boot

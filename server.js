@@ -1083,6 +1083,61 @@ app.get("/api/sp/:id/logs", async (req, res) => {
   }
 })
 
+// GET /api/sp/:id/log-summary?hours=N — total counts by level
+app.get("/api/sp/:id/log-summary", async (req, res) => {
+  const network = parseNetwork(req)
+  const sp = getSP(req.params.id, network)
+  if (!sp) return res.status(404).json({ error: "Unknown SP" })
+  if (!sp.hasLogs) return res.json({ available: false })
+
+  const hours = validateHours(req.query.hours)
+  const cacheKey = `sp:${sp.id}:log-summary:${hours}:${network}`
+  const cached = getCached(req, cacheKey)
+  if (cached) return res.json(cached)
+
+  try {
+    const sql = `
+      SELECT
+        CASE WHEN ${CID_CONTACT_FILTER} THEN 'cid.contact'
+             ELSE JSONExtract(raw, 'level', 'Nullable(String)') END AS level,
+        count(*) AS cnt,
+        max(dt) AS last_seen
+      FROM (
+        SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
+        WHERE dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') = '${sp.clientId}'
+          AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
+          AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
+          ${SUPPRESS_FILTER}
+        UNION ALL
+        SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
+        WHERE _row_type = 1
+          AND dt > now() - INTERVAL ${hours} HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') = '${sp.clientId}'
+          AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
+          AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
+          ${SUPPRESS_FILTER}
+      )
+      GROUP BY level
+      FORMAT JSONEachRow`
+
+    const rows = await queryBetterStack(sql)
+    var errors = 0, warns = 0, info = 0, lastSeen = null
+    for (const r of rows) {
+      if (r.level === "error") errors = r.cnt
+      else if (r.level === "warn") warns = r.cnt
+      else if (r.level === "info") info = r.cnt
+      if (r.last_seen && (!lastSeen || r.last_seen > lastSeen)) lastSeen = r.last_seen
+    }
+    const result = { available: true, errors, warns, info, last_seen: lastSeen }
+    cache.set(cacheKey, result, BS_TTL)
+    res.json(result)
+  } catch (err) {
+    console.error(`sp/${sp.id}/log-summary error:`, err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // GET /api/sp/:id/errors?hours=N — top errors
 app.get("/api/sp/:id/errors", async (req, res) => {
   const network = parseNetwork(req)

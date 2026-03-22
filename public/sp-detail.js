@@ -48,8 +48,7 @@ async function loadTabData(tab, sp) {
     await loadEconomics(sp)
     loadRevenue(sp)
   } else if (tab === "logs" && !spDataCache.logs && sp.hasLogs) {
-    loadLogsSummary(sp)
-    await Promise.all([loadSPTimeline(sp), loadSPErrors(sp), loadSPPatterns(sp), loadSPLogs(sp)])
+    await Promise.all([loadLogsSummary(sp), loadSPTimeline(sp), loadSPErrors(sp), loadSPPatterns(sp), loadSPLogs(sp)])
     spDataCache.logs = true
   }
 }
@@ -77,16 +76,6 @@ function setError(id, msg) {
 function setNoData(id, msg) {
   var el = document.getElementById(id)
   if (el) el.innerHTML = '<div class="no-data">' + msg + '</div>'
-}
-
-function summaryGrid(items) {
-  return '<div class="summary-grid">' + items.map(function(item) {
-    var clickable = item.tab ? ' clickable" onclick="switchTab(\'' + item.tab + '\')"' : '"'
-    return '<div class="sg-card' + clickable + '>' +
-      '<div class="stat-label">' + item.label + '</div>' +
-      '<div class="stat-value ' + (item.cls || '') + '">' + item.value + '</div>' +
-    '</div>'
-  }).join("") + '</div>'
 }
 
 // Show faults modal - shows per-dataset fault breakdown
@@ -985,13 +974,17 @@ function showLogModal(type, index) {
 async function loadLogsSummary(sp) {
   var cardsEl = document.getElementById("log-summary-cards")
   if (!cardsEl) return
-  var logs = sp.logHealth || {}
-  cardsEl.innerHTML = summaryGrid([
-    { label: "Errors", value: formatNum(logs.errors || 0), cls: "errors" },
-    { label: "Warnings", value: formatNum(logs.warns || 0), cls: "warnings" },
-    { label: "Info Logs", value: formatNum(logs.info || 0), cls: "info" },
-    { label: "Last Seen", value: logs.last_seen ? formatTime(logs.last_seen) : "--" },
-  ])
+  try {
+    var data = await fetchJSON(apiUrl("/api/sp/" + sp.id + "/log-summary?hours=" + getHours()))
+    if (!data.available) return
+    var h = getHours()
+    cardsEl.innerHTML = summaryGrid([
+      { label: "Errors (" + h + "h)", value: formatNum(data.errors || 0), cls: data.errors > 0 ? "errors" : "zero" },
+      { label: "Warnings (" + h + "h)", value: formatNum(data.warns || 0), cls: data.warns > 0 ? "warnings" : "zero" },
+      { label: "Info Logs (" + h + "h)", value: formatNum(data.info || 0), cls: data.info > 0 ? "info" : "zero" },
+      { label: "Last Seen", value: data.last_seen ? formatTime(data.last_seen) : "--" },
+    ])
+  } catch (err) {}
 }
 
 async function loadSPTimeline(sp) {
