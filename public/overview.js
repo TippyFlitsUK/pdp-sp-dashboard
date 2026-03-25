@@ -109,7 +109,7 @@ function renderSPGrid(container, providers, perfData) {
 
     // Footer - full curio version
     html += '<div class="sp-home-footer">' +
-      '<span>' + escapeHtml(sp.curioVersion || pingText) + '</span>' +
+      '<span>' + (sp.curioVersion ? escapeHtml(sp.curioVersion) : sp.logHealth ? pingText : '<span style="color:var(--text-muted);opacity:0.5">No logs</span>') + '</span>' +
     '</div>'
 
     html += '</div>'

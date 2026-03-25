@@ -6,12 +6,12 @@ async function loadSPDetail(sp) {
   var titleEl = document.getElementById("detail-title")
   titleEl.innerHTML = sp.name + ' (ID ' + sp.id + ')' +
     (sp.endorsed ? ' <span class="badge endorsed" style="margin-left:8px">ENDORSED</span>' : '') +
-    (sp.curioVersion ? '<span class="detail-version">' + escapeHtml(sp.curioVersion) + '</span>' : '')
+    (sp.curioVersion ? '<span class="detail-version">' + escapeHtml(sp.curioVersion) + '</span>' : '<span class="detail-version" style="opacity:0.5">No logs</span>')
   spDataCache = {}
 
-  // Show/hide logs tab based on hasLogs
+  // Always show logs tab
   var logTab = document.querySelector('[data-tab="logs"]')
-  if (logTab) logTab.style.display = sp.hasLogs ? "" : "none"
+  if (logTab) logTab.style.display = ""
 
   // Set dealbot dashboard link with SP provider ID
   var dealbotLink = document.getElementById("perf-dealbot-link")
@@ -47,8 +47,22 @@ async function loadTabData(tab, sp) {
   } else if (tab === "economics" && !spDataCache.economics) {
     await loadEconomics(sp)
     loadRevenue(sp)
-  } else if (tab === "logs" && !spDataCache.logs && sp.hasLogs) {
-    await Promise.all([loadLogsSummary(sp), loadSPTimeline(sp), loadSPErrors(sp), loadSPPatterns(sp), loadSPLogs(sp)])
+  } else if (tab === "logs" && !spDataCache.logs) {
+    if (sp.logHealth || sp.curioVersion || sp.hasLogs) {
+      document.getElementById("timeline-container").style.display = ''
+      await Promise.all([loadLogsSummary(sp), loadSPTimeline(sp), loadSPErrors(sp), loadSPPatterns(sp), loadSPLogs(sp)])
+    } else {
+      document.getElementById("log-summary-cards").innerHTML = ''
+      document.getElementById("timeline-container").style.display = 'none'
+      document.getElementById("errors-content").innerHTML = ''
+      document.getElementById("patterns-content").innerHTML = ''
+      document.getElementById("logs-content").innerHTML =
+        '<div class="no-data" style="padding:60px 32px">' +
+          '<div style="font-size:15px;margin-bottom:12px">Log streaming is not enabled for this SP</div>' +
+          '<div style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Enable Curio log streaming to see errors, warnings, and performance data here.</div>' +
+          '<a href="https://github.com/FilOzone/warp-speed-log-streaming" target="_blank" style="color:var(--accent);font-size:13px">Setup guide &rsaquo;</a>' +
+        '</div>'
+    }
     spDataCache.logs = true
   }
 }
