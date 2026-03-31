@@ -6,8 +6,9 @@ Comprehensive monitoring dashboard for PDP Storage Providers on Filecoin Onchain
 
 ## Features
 
-- **Homepage** - Network-wide stats with per-SP performance cards showing deal/retrieval success rates and SLA pass/fail status (24h)
+- **Homepage** - Network-wide stats with per-SP performance cards showing deal/retrieval success rates and SLA pass/fail status (72h)
 - **Performance** - Dealbot test results: deals, retrieval, data retention success rates with SLA thresholds, timing metrics, and timeline charts
+- **Activity** - Per-dataset addPieces volume, client identification via FWSS StateView, revenue cross-reference, activity timeline
 - **Proving & Storage** - On-chain proof sets, proving rate, faulted periods, weekly activity charts, and per-dataset detail modals
 - **Economics** - FilecoinPay rails, settlements, revenue tracking with cumulative revenue chart and per-rail detail modals
 - **Logs** - Error/warning timeline, top issues, error patterns, and recent log viewer with level filtering
@@ -20,7 +21,7 @@ Comprehensive monitoring dashboard for PDP Storage Providers on Filecoin Onchain
 | Better Stack (infra_prod) | Dealbot Prometheus metrics | ClickHouse SQL |
 | PDP Scan subgraph | On-chain proofs, proof sets, faults | GraphQL |
 | FilecoinPay subgraph | Payment rails, settlements, revenue | GraphQL |
-| FWSS subgraph | Datasets, storage, pieces | GraphQL |
+| FWSS StateView contract | Client identity, dataset metadata | On-chain (viem) |
 | SP Registry | Liveness pings via /pdp/ping | HTTP |
 
 ## Tracked SPs (Mainnet)
@@ -31,8 +32,10 @@ Comprehensive monitoring dashboard for PDP Storage Providers on Filecoin Onchain
 | 2 | beck-main | Yes |
 | 5 | Mongo2Stor Mainnet | Yes |
 | 7 | infrafolio-mainnet-pdp | Yes |
+| 8 | venus-mainnet | No |
 | 9 | ruka-main | Yes |
 | 11 | laughstorage | Yes |
+| 13 | Angelo | No |
 | 14 | pdp-superusey | Yes |
 
 ## Stack
@@ -69,6 +72,6 @@ Deployed on 77.42.75.71 behind nginx, managed by PM2:
 
 ```bash
 # Deploy updates
-rsync -avz --exclude='node_modules' --exclude='.env' . 77.42.75.71:~/pdp-sp-dashboard/
+rsync -avz --exclude='node_modules' --exclude='.env' --exclude='CLAUDE.md' --exclude='.git' . 77.42.75.71:~/pdp-sp-dashboard/
 ssh 77.42.75.71 'pm2 restart pdp-sp-dashboard'
 ```

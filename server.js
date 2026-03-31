@@ -740,18 +740,18 @@ app.get("/api/sp/:id/activity", async (req, res) => {
 // 4. greatest(delta, 0) to handle counter resets
 function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter, metricsTable) {
   const ctFilter = checkTypeFilter
-    ? `AND JSONExtract(tags, 'checkType', 'Nullable(String)') = '${checkTypeFilter}'`
+    ? `AND tags['checkType'] = '${checkTypeFilter}'`
     : ""
   return `
     WITH raw AS (
       SELECT toStartOfFiveMinutes(dt) AS time,
-        if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
-          JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+        if(startsWith(tags['value'], 'failure'), 'failure',
+          tags['value']) AS status,
         avgMerge(value_avg) AS inner_value
       FROM ${metricsTable}
       WHERE name = '${metricName}'
         AND dt > now() - INTERVAL ${hours} HOUR
-        AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+        AND tags['value'] != 'pending'
         AND ${providerFilter}
         ${ctFilter}
       GROUP BY time, status, series_id
@@ -785,25 +785,25 @@ app.get("/api/network/performance", async (req, res) => {
   if (cached) return res.json(cached)
 
   const networkFilter = network === "mainnet"
-    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
+    ? `AND tags['network'] = 'mainnet'`
     : ""
 
   try {
     function bulkDeltaSql(metricName, checkType, checkTypeFilter) {
       const ctFilter = checkTypeFilter
-        ? `AND JSONExtract(tags, 'checkType', 'Nullable(String)') = '${checkTypeFilter}'`
+        ? `AND tags['checkType'] = '${checkTypeFilter}'`
         : ""
       return `
         WITH raw AS (
           SELECT toStartOfFiveMinutes(dt) AS time,
-            JSONExtract(tags, 'providerId', 'Nullable(String)') AS providerId,
-            if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
-              JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+            tags['providerId'] AS providerId,
+            if(startsWith(tags['value'], 'failure'), 'failure',
+              tags['value']) AS status,
             avgMerge(value_avg) AS inner_value
           FROM ${DEALBOT_METRICS}
           WHERE name = '${metricName}'
             AND dt > now() - INTERVAL 72 HOUR
-            AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+            AND tags['value'] != 'pending'
             ${networkFilter}
             ${ctFilter}
           GROUP BY time, providerId, status, series_id
@@ -865,11 +865,11 @@ app.get("/api/sp/:id/performance", async (req, res) => {
   if (cached) return res.json(cached)
 
   const networkFilterClause = network === "mainnet"
-    ? `AND JSONExtract(tags, 'network', 'Nullable(String)') = 'mainnet'`
+    ? `AND tags['network'] = 'mainnet'`
     : ""
 
   try {
-    const provFilter = `JSONExtract(tags, 'providerId', 'Nullable(String)') = '${sp.id}'
+    const provFilter = `tags['providerId'] = '${sp.id}'
       ${networkFilterClause}`
 
     // Data Storage (deals) and Retrieval - separate metrics, matching Better Stack dashboard
@@ -880,7 +880,7 @@ app.get("/api/sp/:id/performance", async (req, res) => {
     const timingSql = `
       SELECT
         name,
-        JSONExtract(tags, 'checkType', 'Nullable(String)') AS checkType,
+        tags['checkType'] AS checkType,
         avgMerge(value_avg) AS avg_val
       FROM ${DEALBOT_METRICS}
       WHERE dt > now() - INTERVAL ${hours} HOUR
@@ -902,13 +902,13 @@ app.get("/api/sp/:id/performance", async (req, res) => {
     const timelineSql = `
       WITH storage_raw AS (
         SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
-          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
-            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+          if(startsWith(tags['value'], 'failure'), 'failure',
+            tags['value']) AS status,
           avgMerge(value_avg) AS inner_value
         FROM ${DEALBOT_METRICS}
         WHERE name = 'dataStorageStatus'
           AND dt > now() - INTERVAL ${hours} HOUR
-          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          AND tags['value'] != 'pending'
           AND ${provFilter}
         GROUP BY time, time_bucket, status, series_id
       ),
@@ -927,14 +927,14 @@ app.get("/api/sp/:id/performance", async (req, res) => {
       ),
       ret_raw AS (
         SELECT toStartOfFiveMinutes(dt) AS time, ${bucket} AS time_bucket,
-          if(startsWith(JSONExtract(tags, 'value', 'Nullable(String)'), 'failure'), 'failure',
-            JSONExtract(tags, 'value', 'Nullable(String)')) AS status,
+          if(startsWith(tags['value'], 'failure'), 'failure',
+            tags['value']) AS status,
           avgMerge(value_avg) AS inner_value
         FROM ${DEALBOT_METRICS}
         WHERE name = 'retrievalStatus'
-          AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
+          AND tags['checkType'] = 'retrieval'
           AND dt > now() - INTERVAL ${hours} HOUR
-          AND JSONExtract(tags, 'value', 'Nullable(String)') != 'pending'
+          AND tags['value'] != 'pending'
           AND ${provFilter}
         GROUP BY time, time_bucket, status, series_id
       ),
@@ -974,7 +974,7 @@ app.get("/api/sp/:id/performance", async (req, res) => {
       WHERE dt > now() - INTERVAL ${hours} HOUR
         AND name IN ('retrievalCheckMs_sum', 'ipfsRetrievalFirstByteMs_sum', 'ipniVerifyMs_sum')
         AND ${provFilter}
-        AND JSONExtract(tags, 'checkType', 'Nullable(String)') = 'retrieval'
+        AND tags['checkType'] = 'retrieval'
       GROUP BY time, metric
       ORDER BY time ASC
       FORMAT JSONEachRow`
