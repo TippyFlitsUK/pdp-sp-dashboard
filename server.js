@@ -155,11 +155,15 @@ app.get("/api/network/overview", async (req, res) => {
         GROUP BY sp, level
         FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
 
-      // Better Stack curio versions
+      // Better Stack curio versions — prefer build tag matching this network, fall back to latest
       CLIENT_IDS ? queryBetterStack(`
         SELECT
           JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
-          argMax(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt) AS curio_version
+          coalesce(
+            argMaxIf(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt,
+              JSONExtract(raw, 'curio_version', 'Nullable(String)') LIKE '%+${network === "calibration" ? "calibnet" : "mainnet"}+%'),
+            argMax(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt)
+          ) AS curio_version
         FROM (
           SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
           WHERE dt > now() - INTERVAL 24 HOUR
