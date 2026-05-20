@@ -59,11 +59,9 @@ function renderSPGrid(container, providers, perfData) {
     var rtSLA = rtPct !== "N/A" && parseFloat(rtPct) >= 97 && rtTotal >= 200
     var allPass = dsSLA && rtSLA
 
-    // Card border color based on SLA
-    var statusCls = "status-healthy"
-    if (sp.liveness && sp.liveness.alive === false) statusCls = "status-offline"
-    else if (dsTotal === 0 && rtTotal === 0) statusCls = "status-nologs"
-    else if (!allPass) statusCls = "status-error"
+    // No dealbot activity → greyed; both SLAs pass → green; otherwise red.
+    var hasDealbot = (dsTotal + rtTotal) > 0
+    var statusCls = !hasDealbot ? "status-offline" : (allPass ? "status-healthy" : "status-error")
 
     // Proving
     var faults = pdp.faultedPeriods || 0

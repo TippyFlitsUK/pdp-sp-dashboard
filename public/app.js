@@ -7,6 +7,9 @@ var currentTab = "overview"
 var spConfig = []
 var selectedNetwork = "mainnet"
 var forceRefresh = false
+// Per-tab cache for the currently-viewed SP. Cleared on SP/network change or refresh.
+// Declared here so handlers reading it before sp-detail.js loads don't trip on a missing var.
+var spDataCache = {}
 
 function getHours() {
   return selectedHours
@@ -46,13 +49,14 @@ function formatNum(n) {
 }
 
 function formatBytes(bytes) {
+  // Binary (1024-based) units — match the IEC TiB/GiB labels.
   if (!bytes) return "0 B"
   var b = Number(bytes)
   if (isNaN(b) || b === 0) return "0 B"
-  if (b >= 1099511627776) return (b / 1099511627776).toFixed(2) + " TB"
-  if (b >= 1073741824) return (b / 1073741824).toFixed(2) + " GB"
-  if (b >= 1048576) return (b / 1048576).toFixed(2) + " MB"
-  if (b >= 1024) return (b / 1024).toFixed(1) + " KB"
+  if (b >= 1099511627776) return (b / 1099511627776).toFixed(2) + " TiB"
+  if (b >= 1073741824) return (b / 1073741824).toFixed(2) + " GiB"
+  if (b >= 1048576) return (b / 1048576).toFixed(2) + " MiB"
+  if (b >= 1024) return (b / 1024).toFixed(1) + " KiB"
   return b + " B"
 }
 
@@ -289,22 +293,7 @@ function showTab(tabName) {
       var provData = spDataCache.proving
       if (provData && provData.weeklyActivity && provData.weeklyActivity.length > 0) {
         var canvas = document.getElementById("proving-chart")
-        if (canvas) {
-          var weeks = provData.weeklyActivity.slice().reverse()
-          var latestWeekNum = parseInt(weeks[weeks.length - 1].id.slice(2, 4), 16)
-          var nowMs = Date.now()
-          var currentWeekStart = nowMs - (nowMs % (7 * 86400000))
-          var labels = weeks.map(function(w) {
-            var weekNum = parseInt(w.id.slice(2, 4), 16)
-            var offset = (latestWeekNum - weekNum) * 7 * 86400000
-            var d = new Date(currentWeekStart - offset)
-            return d.toLocaleDateString([], { month: "short", day: "numeric" })
-          })
-          drawLineChart(canvas, [
-            { name: "Proofs", color: "#00d68f", data: weeks.map(function(w) { return Number(w.totalProofs) }) },
-            { name: "Faults", color: "#ff4d6a", data: weeks.map(function(w) { return Number(w.totalFaultedPeriods) }) },
-          ], { labels: labels, emptyText: "No proving activity" })
-        }
+        if (canvas) drawWeeklyProvingChart(canvas, provData.weeklyActivity)
       }
     } else if (tabName === "logs") {
       loadSPTimeline(currentSP)
@@ -529,6 +518,24 @@ function drawLineChart(canvas, series, options) {
     ctx.fillStyle = "#8899b4"
     ctx.fillText(lbl, lx + 14, 15)
   }
+}
+
+// Renders the per-SP "Weekly Provider Activity" line chart. Called from both
+// the proving tab activation (app.js) and the initial proving render (sp-detail.js).
+// Uses weekStart (unix ms) from the API for accurate x-axis labels.
+function drawWeeklyProvingChart(canvas, weeklyActivity) {
+  if (!canvas || !weeklyActivity || !weeklyActivity.length) return
+  var weeks = weeklyActivity.slice().reverse()
+  var labels = weeks.map(function(w) {
+    if (w.weekStart) {
+      return new Date(w.weekStart).toLocaleDateString([], { month: "short", day: "numeric" })
+    }
+    return ""
+  })
+  drawLineChart(canvas, [
+    { name: "Proofs", color: "#00d68f", data: weeks.map(function(w) { return Number(w.totalProofs) }) },
+    { name: "Faults", color: "#ff4d6a", data: weeks.map(function(w) { return Number(w.totalFaultedPeriods) }) },
+  ], { labels: labels, emptyText: "No proving activity" })
 }
 
 // Generic sortable table wiring

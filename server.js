@@ -3,21 +3,27 @@ const express = require("express")
 const path = require("path")
 const { Cache } = require("./lib/cache")
 const { getAllSPs, getTrackedSPs, getSP } = require("./lib/sp-config")
-const { getEndpoints, gqlFetch, gqlPaginate } = require("./lib/subgraph")
 const {
   queryBetterStack, queryDealbot, validateHours, timeBucket, getDealbotMetrics,
   RECENT_TABLE, HISTORICAL_TABLE, COMMON_COLS, SUPPRESS_FILTER, CID_CONTACT_FILTER,
 } = require("./lib/betterstack")
 const { startLivenessProbes, getLiveness } = require("./lib/liveness")
-const { getDataSetInfoBatch, getWalletBalances } = require("./lib/fwss")
+const { getDataSetInfoBatch } = require("./lib/fwss")
+const { getWalletBalances } = require("./lib/wallet")
+const { observerStatus, observerGet, toObserverNetwork, OBSERVER_URL } = require("./lib/observer")
+const pdp = require("./lib/pdp")
+const filpay = require("./lib/filpay")
 
 const app = express()
 const PORT = parseInt(process.env.PORT, 10) || 3848
 const cache = new Cache()
 
-const SUBGRAPH_TTL = 5 * 60 * 1000  // 5 min
-const BS_TTL = 5 * 60 * 1000          // 5 min (SP logs — historical queries over hours, no need for 1 min)
-const DEALBOT_TTL = 5 * 60 * 1000    // 5 min (dealbot tests run every ~45 min)
+const SUBGRAPH_TTL = 5 * 60 * 1000  // 5 min (observer-backed responses)
+const BS_TTL = 5 * 60 * 1000        // 5 min (BetterStack SP logs)
+const DEALBOT_TTL = 5 * 60 * 1000   // 5 min (dealbot tests run every ~45 min)
+const DORMANT_DAYS = 14             // SPs with chain activity older than this are flagged dormant
+
+function lc(s) { return (s || "").toLowerCase() }
 
 function shouldRefresh(req) {
   return req.query.refresh === "1"
@@ -36,55 +42,60 @@ function parseNetwork(req) {
   return req.query.network === "calibration" ? "calibration" : "mainnet"
 }
 
-function getClientIds(network) {
-  return getTrackedSPs(network).map(sp => `'${sp.clientId}'`).join(", ")
+// Returns a SQL-fragment "'clientA', 'clientB'" or "" if no SPs have logs.
+// The empty-string return is intentional and used by the ternary in network/overview
+// to skip BetterStack queries when there's nothing to filter on.
+async function getClientIds(network) {
+  return (await getTrackedSPs(network)).map(sp => `'${sp.clientId}'`).join(", ")
 }
 
 // --- API Routes ---
 
-// GET /api/config — SP list with liveness
-app.get("/api/config", (req, res) => {
-  const network = parseNetwork(req)
-  const liveness = getLiveness(network)
-  const sps = getAllSPs(network).map(sp => ({
-    ...sp,
-    liveness: liveness[sp.id] || { alive: null, latencyMs: null, lastCheck: null },
-  }))
-  res.json(sps)
+// GET /api/health/observer — connectivity + per-network indexer lag from foc-observer
+app.get("/api/health/observer", async (req, res) => {
+  const start = Date.now()
+  try {
+    const status = await observerStatus()
+    res.json({
+      url: OBSERVER_URL,
+      latencyMs: Date.now() - start,
+      networks: status,
+    })
+  } catch (err) {
+    res.status(503).json({
+      url: OBSERVER_URL,
+      error: err.message,
+      latencyMs: Date.now() - start,
+    })
+  }
 })
 
-// GET /api/network/global — NetworkMetric + GlobalMetric totals
+// GET /api/config — SP list with liveness
+app.get("/api/config", async (req, res) => {
+  try {
+    const network = parseNetwork(req)
+    const liveness = getLiveness(network)
+    const allSps = await getAllSPs(network)
+    const sps = allSps.map(sp => ({
+      ...sp,
+      liveness: liveness[sp.id] || { alive: null, latencyMs: null, lastCheck: null },
+    }))
+    res.json(sps)
+  } catch (err) {
+    console.error("config error:", err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// GET /api/network/global — totals from foc-observer indexed events
 app.get("/api/network/global", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
   const cacheKey = `network:global:${network}`
   const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
-    const pdpData = await gqlFetch(endpoints.pdpScan, `{
-      networkMetrics(first: 1) {
-        totalProviders
-        totalProofSets
-        totalRoots
-        totalDataSize
-        totalProofs
-        totalFaultedPeriods
-      }
-    }`)
-
-    const pdp = pdpData.networkMetrics?.[0] || {}
-
-    const result = {
-      providers: Number(pdp.totalProviders || 0),
-      proofSets: Number(pdp.totalProofSets || 0),
-      roots: Number(pdp.totalRoots || 0),
-      dataSize: pdp.totalDataSize || "0",
-      storageSize: pdp.totalDataSize || "0",
-      proofsSubmitted: Number(pdp.totalProofs || 0),
-      faultedPeriods: Number(pdp.totalFaultedPeriods || 0),
-    }
-
+    const result = await pdp.getNetworkTotals(network)
     cache.set(cacheKey, result, SUBGRAPH_TTL)
     res.json(result)
   } catch (err) {
@@ -96,37 +107,31 @@ app.get("/api/network/global", async (req, res) => {
 // GET /api/network/overview — unified SP data from all sources
 app.get("/api/network/overview", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
-  const CLIENT_IDS = getClientIds(network)
   const cacheKey = `network:overview:${network}`
   const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
   try {
+    const CLIENT_IDS = await getClientIds(network)
     // Parallel fetch all data sources
-    const [pdpProviders, filpayRails, bsOverview, bsVersions] = await Promise.all([
-      // PDP Scan providers
-      gqlFetch(endpoints.pdpScan, `{
-        providers(first: 100) {
-          id
-          address
-          totalProofSets
-          totalRoots
-          totalDataSize
-          totalFaultedPeriods
-          totalProvingPeriods
-        }
-      }`).then(d => d.providers || []).catch(() => []),
+    const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions] = await Promise.all([
+      // Per-provider PDP rollup — sourced from foc-observer indexed events
+      pdp.getAllProvidersRollup(network).catch(err => {
+        console.error("getAllProvidersRollup error:", err.message)
+        return []
+      }),
 
-      // FilecoinPay active rails
-      gqlPaginate(endpoints.filecoinPay, "rails", `
-        railId
-        paymentRate
-        state
-        totalSettledAmount
-        payer { id }
-        payee { id }
-      `, 'state: "ACTIVE"').catch(() => []),
+      // FilecoinPay active rails — by-payee aggregate from observer indexed events
+      filpay.getAllActiveRailsByPayee(network).catch(err => {
+        console.error("getAllActiveRailsByPayee error:", err.message)
+        return {}
+      }),
+
+      // Dealbot test counts last 72h — proves liveness even when an SP has no chain activity
+      observerGet(`/metrics/providers/${toObserverNetwork(network)}?hours=72`).catch(err => {
+        console.error("dealbot metrics error:", err.message)
+        return { providers: [] }
+      }),
 
       // Better Stack overview (tracked SPs)
       CLIENT_IDS ? queryBetterStack(`
@@ -192,19 +197,13 @@ app.get("/api/network/overview", async (req, res) => {
           dataSize: p.totalDataSize || "0",
           faultedPeriods: Number(p.totalFaultedPeriods || 0),
           provingPeriods: Number(p.totalProvingPeriods || 0),
+          lastActivity: p.lastActivity || null,
         },
       }
     }
 
-    // Map FilecoinPay rails by payee address (lowercase)
-    const railsByPayee = {}
-    for (const r of filpayRails) {
-      const addr = (r.payee?.id || r.payee || "").toLowerCase()
-      if (!railsByPayee[addr]) railsByPayee[addr] = { activeRails: 0, totalRate: BigInt(0), totalSettled: BigInt(0) }
-      railsByPayee[addr].activeRails++
-      railsByPayee[addr].totalRate += BigInt(r.paymentRate || 0)
-      railsByPayee[addr].totalSettled += BigInt(r.totalSettledAmount || 0)
-    }
+    // filpayRails is already keyed by lowercase payee with subgraph-shaped totals.
+    const railsByPayee = filpayRails
 
     // Better Stack log counts by SP
     const bsByClient = {}
@@ -227,14 +226,43 @@ app.get("/api/network/overview", async (req, res) => {
       versionByClient[v.sp] = v.curio_version
     }
 
+    // Build dealbot-tested set: any SP with deal or retrieval tests in last 72h is alive.
+    // Treat this as the strongest liveness signal — overrides chain-event-based dormant flag.
+    const dealbotTested = new Set()
+    for (const p of (dealbotMetrics.providers || [])) {
+      const total = Number(p.totalDeals || 0) + Number(p.totalIpfsRetrievals || 0)
+      if (total > 0) dealbotTested.add(String(p.providerId))
+    }
+
     // Merge all into SP list
     const liveness = getLiveness(network)
-    const result = getAllSPs(network).map(sp => {
-      const addr = sp.address.toLowerCase()
+    const allSps = await getAllSPs(network)
+    const nowSec = Math.floor(Date.now() / 1000)
+    const dormantCutoff = nowSec - DORMANT_DAYS * 86400
+    const result = allSps.map(sp => {
+      const addr = lc(sp.address)
       const pdp = providerMap[addr]?.pdp || null
       const rails = railsByPayee[addr]
       const bs = sp.hasLogs ? bsByClient[sp.clientId] || null : null
       const version = sp.hasLogs ? versionByClient[sp.clientId] || null : null
+      const isDealbotTested = dealbotTested.has(String(sp.id))
+
+      // Activity status: dealbot test traffic > chain-event recency > nothing.
+      //   registered-no-activity = no datasets AND no dealbot tests
+      //   dormant = had datasets but chain activity is stale AND no dealbot tests
+      //   active = recent chain activity OR dealbot is currently testing
+      let lastActivity = pdp?.lastActivity || 0
+      if (isDealbotTested) lastActivity = Math.max(lastActivity, nowSec)
+      let activityStatus
+      if (isDealbotTested) {
+        activityStatus = "active"
+      } else if (!pdp || pdp.proofSets === 0) {
+        activityStatus = "registered-no-activity"
+      } else if (lastActivity < dormantCutoff) {
+        activityStatus = "dormant"
+      } else {
+        activityStatus = "active"
+      }
 
       return {
         id: sp.id,
@@ -244,6 +272,8 @@ app.get("/api/network/overview", async (req, res) => {
         endorsed: sp.endorsed || false,
         liveness: liveness[sp.id] || null,
         pdp,
+        lastActivity: lastActivity || null,
+        activityStatus,
         economics: rails ? {
           activeRails: rails.activeRails,
           totalRate: rails.totalRate.toString(),
@@ -252,6 +282,15 @@ app.get("/api/network/overview", async (req, res) => {
         logHealth: bs,
         curioVersion: version,
       }
+    })
+
+    // Two-tier sort: dealbot-tested SPs (active) first, then everyone else.
+    // Within each block, sort by id ascending.
+    result.sort((a, b) => {
+      const aActive = dealbotTested.has(String(a.id)) ? 0 : 1
+      const bActive = dealbotTested.has(String(b.id)) ? 0 : 1
+      if (aActive !== bActive) return aActive - bActive
+      return a.id - b.id
     })
 
     cache.set(cacheKey, result, BS_TTL)
@@ -264,11 +303,10 @@ app.get("/api/network/overview", async (req, res) => {
 
 // --- SP Detail Routes ---
 
-// GET /api/sp/:id/proving
+// GET /api/sp/:id/proving — provider summary + dataset list + weekly activity from foc-observer
 app.get("/api/sp/:id/proving", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const cacheKey = `sp:${sp.id}:proving:${network}`
@@ -276,60 +314,7 @@ app.get("/api/sp/:id/proving", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const addr = sp.address.toLowerCase()
-    const [providerData, dataSets, weeklyData] = await Promise.all([
-      gqlFetch(endpoints.pdpScan, `{
-        provider(id: "${addr}") {
-          totalProofSets
-          totalRoots
-          totalDataSize
-          totalFaultedPeriods
-          totalProvingPeriods
-          totalFaultedRoots
-          createdAt
-        }
-      }`),
-
-      gqlPaginate(endpoints.pdpScan, "dataSets", `
-        id setId leafCount totalRoots totalDataSize isActive
-        lastProvenEpoch nextChallengeEpoch nextDeadline
-        totalFaultedRoots totalFaultedPeriods createdAt
-      `, `owner: "${addr}"`, "setId"),
-
-      gqlFetch(endpoints.pdpScan, `{
-        weeklyProviderActivities(first: 20, where: {provider: "${addr}"}, orderBy: id, orderDirection: desc) {
-          id
-          totalProofs
-          totalRootsProved
-          totalFaultedRoots
-          totalFaultedPeriods
-          totalRootsAdded
-          totalDataSizeAdded
-          totalProofSetsCreated
-        }
-      }`),
-    ])
-
-    const data = {
-      provider: providerData.provider,
-      dataSets: dataSets.reverse(),
-      weeklyProviderActivities: weeklyData.weeklyProviderActivities || [],
-    }
-
-    // Determine status: PDP Scan isActive is always true, so use totalRoots/totalDataSize as heuristic
-    for (const ds of (data.dataSets || [])) {
-      const hasData = Number(ds.totalRoots || 0) > 0 || ds.totalDataSize !== "0"
-      ds.status = hasData ? "Active" : "Terminated"
-    }
-
-    // Fault data comes from DataSet.totalFaultedPeriods and WeeklyProviderActivity.totalFaultedPeriods
-    // (FaultRecord entity is empty on both networks — PDP Scan website uses these embedded fields)
-    const result = {
-      provider: data.provider,
-      dataSets: data.dataSets || [],
-      weeklyActivity: data.weeklyProviderActivities || [],
-    }
-
+    const result = await pdp.getProvingDetail(network, sp.address)
     cache.set(cacheKey, result, SUBGRAPH_TTL)
     res.json(result)
   } catch (err) {
@@ -338,11 +323,10 @@ app.get("/api/sp/:id/proving", async (req, res) => {
   }
 })
 
-// GET /api/sp/:id/dataset/:setId — single dataset detail from PDP Scan
+// GET /api/sp/:id/dataset/:setId — single dataset detail from foc-observer
 app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   const setId = req.params.setId
   if (!/^\d+$/.test(setId)) return res.status(400).json({ error: "Invalid setId" })
@@ -352,18 +336,7 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const addr = sp.address.toLowerCase()
-    const pdpData = await gqlFetch(endpoints.pdpScan, `{
-      dataSets(first: 1, where: {setId: "${setId}", owner: "${addr}"}) {
-        setId leafCount challengeRange isActive
-        lastProvenEpoch nextChallengeEpoch nextDeadline firstDeadline
-        maxProvingPeriod challengeWindowSize currentDeadlineCount provenThisPeriod
-        totalRoots nextPieceId totalDataSize totalProofs totalProvedRoots
-        totalFeePaid totalFaultedPeriods totalFaultedRoots
-        totalTransactions totalEventLogs createdAt updatedAt blockNumber
-      }
-    }`).then(d => d.dataSets?.[0] || null).catch(() => null)
-
+    const pdpData = await pdp.getDatasetDetail(network, sp.address, setId)
     if (!pdpData) return res.status(404).json({ error: "Dataset not found" })
 
     const result = { pdp: pdpData, fwss: null }
@@ -375,11 +348,10 @@ app.get("/api/sp/:id/dataset/:setId", async (req, res) => {
   }
 })
 
-// GET /api/sp/:id/revenue — daily settlement history
+// GET /api/sp/:id/revenue — daily settlement history (observer-derived)
 app.get("/api/sp/:id/revenue", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const cacheKey = `sp:${sp.id}:revenue:${network}`
@@ -387,24 +359,7 @@ app.get("/api/sp/:id/revenue", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const addr = sp.address.toLowerCase()
-    const settlements = await gqlPaginate(endpoints.filecoinPay, "settlements", `
-      totalNetPayeeAmount
-      createdAt
-    `, `rail_: {payee: "${addr}"}, totalNetPayeeAmount_gt: "0"`, "createdAt")
-
-    // Aggregate by day
-    const byDay = {}
-    for (const s of settlements) {
-      const d = new Date(Number(s.createdAt) * 1000)
-      const key = d.toISOString().slice(0, 10)
-      if (!byDay[key]) byDay[key] = 0
-      byDay[key] += Number(s.totalNetPayeeAmount) / 1e18
-    }
-
-    const days = Object.keys(byDay).sort()
-    const result = days.map(d => ({ date: d, revenue: byDay[d] }))
-
+    const result = await filpay.getDailyRevenue(network, sp.address)
     cache.set(cacheKey, result, SUBGRAPH_TTL)
     res.json(result)
   } catch (err) {
@@ -413,11 +368,10 @@ app.get("/api/sp/:id/revenue", async (req, res) => {
   }
 })
 
-// GET /api/sp/:id/economics
+// GET /api/sp/:id/economics — rails + FilecoinPay account + wallet balances (observer + viem)
 app.get("/api/sp/:id/economics", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const cacheKey = `sp:${sp.id}:economics:${network}`
@@ -425,54 +379,24 @@ app.get("/api/sp/:id/economics", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const addr = sp.address.toLowerCase()
-    const [rails, accountData, walletBalances] = await Promise.all([
-      gqlPaginate(endpoints.filecoinPay, "rails", `
-        railId
-        paymentRate
-        state
-        totalSettledAmount
-        settledUpto
-        totalSettlements
-        payer { id }
-        payee { id }
-        createdAt
-      `, `payee: "${addr}"`, "railId"),
-
-      gqlFetch(endpoints.filecoinPay, `{
-        userTokens(where: {account: "${addr}"}) {
-          funds
-          payout
-          fundsCollected
-          lockupCurrent
-          lockupRate
-          lockupLastSettledUntilTimestamp
-          token { symbol decimals }
-        }
-      }`).catch(() => ({ userTokens: [] })),
-
+    const addr = lc(sp.address)
+    const [rails, account, walletBalances] = await Promise.all([
+      filpay.getSpRails(network, addr),
+      filpay.getAccount(network, addr),
       getWalletBalances(addr, network).catch(() => null),
     ])
 
-    // Sum totalSettledAmount directly from rails
     let totalSettled = BigInt(0)
     for (const r of rails) {
       totalSettled += BigInt(r.totalSettledAmount || 0)
     }
 
-    // Account balance from subgraph
-    const ut = accountData.userTokens?.[0] || {}
-
     const result = {
       rails,
-      account: {
-        funds: ut.funds || "0",
-        payout: ut.payout || "0",
-        fundsCollected: ut.fundsCollected || "0",
-        lockupCurrent: ut.lockupCurrent || "0",
-        lockupRate: ut.lockupRate || "0",
-        lastSettled: ut.lockupLastSettledUntilTimestamp || null,
-        token: ut.token?.symbol || "USDFC",
+      account: account || {
+        funds: "0", payout: "0", fundsCollected: "0",
+        lockupCurrent: "0", lockupRate: "0", lastSettled: null,
+        token: { symbol: "USDFC", decimals: 18 },
       },
       summary: {
         activeRails: rails.filter(r => r.state === "ACTIVE").length,
@@ -490,11 +414,10 @@ app.get("/api/sp/:id/economics", async (req, res) => {
   }
 })
 
-// GET /api/sp/:id/rail/:railId — single rail detail
+// GET /api/sp/:id/rail/:railId — single rail detail (observer-derived)
 app.get("/api/sp/:id/rail/:railId", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   const railId = req.params.railId
   if (!/^\d+$/.test(railId)) return res.status(400).json({ error: "Invalid railId" })
@@ -504,42 +427,10 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const addr = sp.address.toLowerCase()
-    const data = await gqlFetch(endpoints.filecoinPay, `{
-      rails(first: 1, where: {railId: "${railId}", payee: "${addr}"}) {
-        railId
-        paymentRate
-        lockupFixed
-        lockupPeriod
-        settledUpto
-        state
-        endEpoch
-        commissionRateBps
-        totalOneTimePaymentAmount
-        totalSettledAmount
-        totalOneTimePayments
-        totalSettlements
-        totalRateChanges
-        createdAt
-        payer { id }
-        payee { id }
-        operator { id }
-        token { symbol decimals }
-        settlements(first: 20, orderBy: createdAt, orderDirection: desc) {
-          totalSettledAmount
-          totalNetPayeeAmount
-          networkFee
-          operatorCommission
-          settledUpto
-          createdAt
-          txHash
-        }
-      }
-    }`)
-
-    const rail = data.rails?.[0]
-    if (!rail) return res.status(404).json({ error: "Rail not found" })
-
+    const rail = await filpay.getRailDetail(network, railId)
+    if (!rail || lc(rail.payee?.id) !== lc(sp.address)) {
+      return res.status(404).json({ error: "Rail not found" })
+    }
     const result = { rail, dataset: null }
     cache.set(cacheKey, result, SUBGRAPH_TTL)
     res.json(result)
@@ -553,8 +444,7 @@ app.get("/api/sp/:id/rail/:railId", async (req, res) => {
 // GET /api/sp/:id/activity?hours=N — per-dataset activity analysis (addPieces volume, revenue cross-ref)
 app.get("/api/sp/:id/activity", async (req, res) => {
   const network = parseNetwork(req)
-  const endpoints = getEndpoints(network)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const hours = validateHours(req.query.hours)
@@ -563,73 +453,13 @@ app.get("/api/sp/:id/activity", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const addr = sp.address.toLowerCase()
-    const cutoff = Math.floor(Date.now() / 1000) - (hours * 3600)
-
-    // Parallel: datasets, recent addPieces txs, recent roots (data size), weekly activity, FilecoinPay rails
-    const [dataSets, recentTxs, recentRoots, weeklyActivity, rails] = await Promise.all([
-      gqlPaginate(endpoints.pdpScan, "dataSets", `
-        setId totalRoots totalDataSize totalTransactions totalFeePaid
-        createdAt updatedAt isActive
-      `, `owner: "${addr}"`, "setId"),
-
-      // Recent transactions — paginate using createdAt cursor to avoid skip limit
-      (async () => {
-        let all = []
-        let cursor = cutoff
-        const pageSize = 1000
-        for (let i = 0; i < 20; i++) {
-          const data = await gqlFetch(endpoints.pdpScan, `{
-            transactions(first: ${pageSize}, orderBy: createdAt, orderDirection: asc,
-              where: {proofSet_: {owner: "${addr}"}, createdAt_gt: "${cursor}", method: "addPieces"}) {
-              dataSetId createdAt
-            }
-          }`)
-          const items = data.transactions || []
-          all.push(...items)
-          if (items.length < pageSize) break
-          cursor = items[items.length - 1].createdAt
-        }
-        return all
-      })(),
-
-      // Recent roots — paginate to sum actual data size added per dataset
-      (async () => {
-        let all = []
-        let cursor = cutoff
-        const pageSize = 1000
-        for (let i = 0; i < 20; i++) {
-          const data = await gqlFetch(endpoints.pdpScan, `{
-            roots(first: ${pageSize}, orderBy: createdAt, orderDirection: asc,
-              where: {proofSet_: {owner: "${addr}"}, createdAt_gt: "${cursor}"}) {
-              setId rawSize createdAt
-            }
-          }`)
-          const items = data.roots || []
-          all.push(...items)
-          if (items.length < pageSize) break
-          cursor = items[items.length - 1].createdAt
-        }
-        return all
-      })(),
-
-      // Weekly proof set activity for all SP datasets (last 12 weeks)
-      gqlPaginate(endpoints.pdpScan, "weeklyProofSetActivities", `
-        id dataSetId totalRootsAdded totalDataSizeAdded totalProofs totalFaultedPeriods
-      `, `proofSet_: {owner: "${addr}"}`, "id"),
-
-      // FilecoinPay rails for revenue cross-reference
-      gqlPaginate(endpoints.filecoinPay, "rails", `
-        railId paymentRate state payer { id } totalSettledAmount totalSettlements createdAt
-      `, `payee: "${addr}"`, "railId"),
+    // PDP activity + rails — both from foc-observer
+    const [activity, rails] = await Promise.all([
+      pdp.getSpActivity(network, sp.address, hours),
+      filpay.getSpRails(network, sp.address),
     ])
-
-    // Sum recent data size per dataset from actual roots
-    const recentSizeByDataset = {}
-    for (const root of recentRoots) {
-      const dsId = root.setId
-      recentSizeByDataset[dsId] = (recentSizeByDataset[dsId] || 0n) + BigInt(root.rawSize || 0)
-    }
+    const { dataSets, transactions: recentTxs, recentSizeBySet } = activity
+    const recentSizeByDataset = recentSizeBySet  // Map<setId, BigInt>
 
     // Count addPieces per dataset and build timeline buckets
     const txByDataset = {}
@@ -637,24 +467,15 @@ app.get("/api/sp/:id/activity", async (req, res) => {
     // Bucket size: <=6h -> 15min, <=24h -> 1h, <=72h -> 3h, else 6h
     const bucketSec = hours <= 6 ? 900 : hours <= 24 ? 3600 : hours <= 72 ? 10800 : 21600
     for (const tx of recentTxs) {
-      txByDataset[tx.dataSetId] = (txByDataset[tx.dataSetId] || 0) + 1
+      txByDataset[tx.setId] = (txByDataset[tx.setId] || 0) + 1
       const bucket = Math.floor(Number(tx.createdAt) / bucketSec) * bucketSec
-      const key = `${bucket}:${tx.dataSetId}`
+      const key = `${bucket}:${tx.setId}`
       timelineBuckets[key] = (timelineBuckets[key] || 0) + 1
     }
-    // Convert to array: [{time, dataSetId, count}]
     const timeline = Object.entries(timelineBuckets).map(([key, count]) => {
       const [time, dataSetId] = key.split(":")
       return { time: Number(time), dataSetId, count }
     })
-
-    // Parse weekly activity into per-dataset arrays
-    const weeklyByDataset = {}
-    for (const w of weeklyActivity) {
-      const dsId = w.dataSetId
-      if (!weeklyByDataset[dsId]) weeklyByDataset[dsId] = []
-      weeklyByDataset[dsId].push(w)
-    }
 
     // Index rails by railId for fast lookup
     const railById = {}
@@ -672,9 +493,6 @@ app.get("/api/sp/:id/activity", async (req, res) => {
     let datasets = dataSets.map(ds => {
       const dsId = ds.setId
       const recentTxCount = txByDataset[dsId] || 0
-      const weekly = (weeklyByDataset[dsId] || [])
-        .sort((a, b) => a.id > b.id ? -1 : 1)
-        .slice(0, 12)
 
       const fwss = fwssData[dsId] || null
       const client = fwss?.payer || null
@@ -710,7 +528,7 @@ app.get("/api/sp/:id/activity", async (req, res) => {
         pdpRailId,
         railState,
         dailyRevenue,
-        weeklyActivity: weekly,
+        weeklyActivity: [],
       }
     })
 
@@ -860,7 +678,7 @@ app.get("/api/network/performance", async (req, res) => {
 app.get("/api/sp/:id/performance", async (req, res) => {
   const network = parseNetwork(req)
   const DEALBOT_METRICS = getDealbotMetrics(network)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
 
   const hours = validateHours(req.query.hours)
@@ -1026,7 +844,7 @@ app.get("/api/sp/:id/performance", async (req, res) => {
 // GET /api/sp/:id/logs?hours=N&level=X — raw logs
 app.get("/api/sp/:id/logs", async (req, res) => {
   const network = parseNetwork(req)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, logs: [] })
 
@@ -1090,7 +908,7 @@ app.get("/api/sp/:id/logs", async (req, res) => {
 // GET /api/sp/:id/log-summary?hours=N — total counts by level
 app.get("/api/sp/:id/log-summary", async (req, res) => {
   const network = parseNetwork(req)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false })
 
@@ -1145,7 +963,7 @@ app.get("/api/sp/:id/log-summary", async (req, res) => {
 // GET /api/sp/:id/errors?hours=N — top errors
 app.get("/api/sp/:id/errors", async (req, res) => {
   const network = parseNetwork(req)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, errors: [] })
 
@@ -1196,7 +1014,7 @@ app.get("/api/sp/:id/errors", async (req, res) => {
 // GET /api/sp/:id/error-detail?hours=N&msg=X — individual occurrences of a grouped error
 app.get("/api/sp/:id/error-detail", async (req, res) => {
   const network = parseNetwork(req)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, entries: [] })
 
@@ -1252,7 +1070,7 @@ app.get("/api/sp/:id/error-detail", async (req, res) => {
 // GET /api/sp/:id/patterns?hours=N — error patterns (grouped by message, no err field)
 app.get("/api/sp/:id/patterns", async (req, res) => {
   const network = parseNetwork(req)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, patterns: [] })
 
@@ -1303,7 +1121,7 @@ app.get("/api/sp/:id/patterns", async (req, res) => {
 // GET /api/sp/:id/timeline?hours=N — error timeline
 app.get("/api/sp/:id/timeline", async (req, res) => {
   const network = parseNetwork(req)
-  const sp = getSP(req.params.id, network)
+  const sp = await getSP(req.params.id, network)
   if (!sp) return res.status(404).json({ error: "Unknown SP" })
   if (!sp.hasLogs) return res.json({ available: false, timeline: [] })
 
@@ -1348,59 +1166,8 @@ app.get("/api/sp/:id/timeline", async (req, res) => {
   }
 })
 
-// Background pre-warming — hit local endpoints to populate cache
-async function prewarm(network) {
-  const base = `http://localhost:${PORT}`
-  const endpoints = [
-    `/api/network/global?network=${network}`,
-    `/api/network/overview?network=${network}`,
-    `/api/network/performance?network=${network}`,
-  ]
-  for (const ep of endpoints) {
-    try {
-      await fetch(`${base}${ep}`, { signal: AbortSignal.timeout(30000) })
-    } catch {}
-  }
-  console.log(`Prewarm ${network}: done`)
-}
-
-// Prewarm FWSS cache — fetch all dataset IDs from PDP Scan and pre-populate client mappings
-async function prewarmFWSS() {
-  try {
-    const endpoints = getEndpoints("mainnet")
-    const dataSets = await gqlPaginate(endpoints.pdpScan, "dataSets", "setId", "", "setId")
-    const ids = dataSets.map(ds => ds.setId)
-    console.log(`FWSS prewarm: fetching ${ids.length} datasets...`)
-    await getDataSetInfoBatch(ids, "mainnet")
-    console.log(`FWSS prewarm: done (${ids.length} datasets cached)`)
-  } catch (err) {
-    console.error("FWSS prewarm error:", err.message)
-  }
-}
-
-function startPrewarm() {
-  // Initial prewarm after 2s (let server start first)
-  setTimeout(() => {
-    prewarm("mainnet")
-    prewarm("calibration")
-    prewarmFWSS()
-  }, 2000)
-
-  // Repeat every 5 min (network), 30 min (FWSS — matches FWSS cache TTL)
-  const interval = setInterval(() => {
-    prewarm("mainnet")
-    prewarm("calibration")
-  }, 5 * 60 * 1000)
-  const fwssInterval = setInterval(() => {
-    prewarmFWSS()
-  }, 30 * 60 * 1000)
-  fwssInterval.unref()
-  interval.unref()
-}
-
 // Start server
 startLivenessProbes()
-startPrewarm()
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`PDP SP Dashboard running on http://0.0.0.0:${PORT}`)
 })

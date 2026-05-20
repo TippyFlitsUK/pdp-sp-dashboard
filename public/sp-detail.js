@@ -1,6 +1,6 @@
 // SP Detail -- rich overview tab + tabbed sections with proper layouts
 
-var spDataCache = {}
+// spDataCache is declared at the top of app.js so it's available before this file loads.
 
 async function loadSPDetail(sp) {
   var titleEl = document.getElementById("detail-title")
@@ -336,25 +336,9 @@ async function loadProving(sp) {
       })
     })
 
-    // Draw weekly activity line chart
+    // Draw weekly activity line chart (shared with the tab-switch redraw path)
     if (data.weeklyActivity && data.weeklyActivity.length > 0) {
-      var canvas = document.getElementById("proving-chart")
-      if (canvas) {
-        var weeks = data.weeklyActivity.slice().reverse()
-        var latestWeekNum = parseInt(weeks[weeks.length - 1].id.slice(2, 4), 16)
-        var nowMs = Date.now()
-        var currentWeekStart = nowMs - (nowMs % (7 * 86400000))
-        var labels = weeks.map(function(w) {
-          var weekNum = parseInt(w.id.slice(2, 4), 16)
-          var offset = (latestWeekNum - weekNum) * 7 * 86400000
-          var d = new Date(currentWeekStart - offset)
-          return d.toLocaleDateString([], { month: "short", day: "numeric" })
-        })
-        drawLineChart(canvas, [
-          { name: "Proofs", color: "#00d68f", data: weeks.map(function(w) { return Number(w.totalProofs) }) },
-          { name: "Faults", color: "#ff4d6a", data: weeks.map(function(w) { return Number(w.totalFaultedPeriods) }) },
-        ], { labels: labels, emptyText: "No proving activity" })
-      }
+      drawWeeklyProvingChart(document.getElementById("proving-chart"), data.weeklyActivity)
     }
   } catch (err) {
     setError("proving-content", err.message)
