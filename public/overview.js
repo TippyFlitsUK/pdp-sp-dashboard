@@ -37,6 +37,23 @@ function renderStatsBar(container, g) {
 }
 
 function renderSPGrid(container, providers, perfData) {
+  // Group cards by dealbot activity using the SAME perfData the cards render from,
+  // so a card's activity state and its position can never disagree. (The server's
+  // observer-rollup signal can lag the BS-direct card data and briefly strand a
+  // freshly-active SP at the bottom.) Active first, then everyone else; id asc within.
+  function spHasDealbot(sp) {
+    var perf = perfData[String(sp.id)] || {}
+    var ds = perf["dataStorage"] || { success: 0, failed: 0 }
+    var rt = perf["retrieval"] || { success: 0, failed: 0 }
+    return (ds.success + ds.failed + rt.success + rt.failed) > 0
+  }
+  providers = providers.slice().sort(function(a, b) {
+    var aRank = spHasDealbot(a) ? 0 : 1
+    var bRank = spHasDealbot(b) ? 0 : 1
+    if (aRank !== bRank) return aRank - bRank
+    return a.id - b.id
+  })
+
   var html = '<div class="panel" style="padding:20px 24px">'
   html += '<div class="sp-home-grid">'
 

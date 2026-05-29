@@ -284,14 +284,11 @@ app.get("/api/network/overview", async (req, res) => {
       }
     })
 
-    // Two-tier sort: dealbot-tested SPs (active) first, then everyone else.
-    // Within each block, sort by id ascending.
-    result.sort((a, b) => {
-      const aActive = dealbotTested.has(String(a.id)) ? 0 : 1
-      const bActive = dealbotTested.has(String(b.id)) ? 0 : 1
-      if (aActive !== bActive) return aActive - bActive
-      return a.id - b.id
-    })
+    // Stable id-ascending order. The frontend regroups cards by dealbot activity
+    // using the same performance feed it renders from, so display order always
+    // matches each card's activity state. (Tiering here on the observer rollup
+    // could lag the BS-direct card data and strand a freshly-active SP at the end.)
+    result.sort((a, b) => a.id - b.id)
 
     cache.set(cacheKey, result, BS_TTL)
     res.json(result)
