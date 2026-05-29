@@ -251,7 +251,7 @@ async function loadProving(sp) {
     var html = summaryGrid([
       { label: "Total Data Sets", value: formatNum(prov.totalProofSets) },
       { label: "Data Stored", value: formatBytes(prov.totalDataSize) },
-      { label: "Total Pieces", value: Number(prov.totalRoots || 0).toLocaleString() },
+      { label: "Pieces Added (on-chain)", value: Number(prov.totalRoots || 0).toLocaleString() },
     ]) + '<div class="summary-grid">' +
       '<div class="sg-card clickable" onclick="showFaultsModal()">' +
         '<div class="stat-label">Faulted Periods (All Time)</div>' +
