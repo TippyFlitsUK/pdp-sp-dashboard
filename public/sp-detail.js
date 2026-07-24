@@ -2,6 +2,12 @@
 
 // spDataCache is declared at the top of app.js so it's available before this file loads.
 
+var GENESIS_TS = { mainnet: 1598306400, calibration: 1667326380 }
+
+function chainEpoch(unixSeconds) {
+  return Math.floor((unixSeconds - (GENESIS_TS[selectedNetwork] || GENESIS_TS.mainnet)) / 30)
+}
+
 async function loadSPDetail(sp) {
   var titleEl = document.getElementById("detail-title")
   titleEl.innerHTML = sp.name + ' (ID ' + sp.id + ')' +
@@ -358,18 +364,19 @@ async function loadEconomics(sp) {
 
     // Expected settlement: accrued on active rails since last settlement
     // paymentRate is per Filecoin epoch (30s), settledUpto is epoch number
-    var currentEpoch = Math.floor((Date.now() / 1000 - 1598306400) / 30)
+    var currentEpoch = chainEpoch(Date.now() / 1000)
     var expectedSettlement = 0
     if (data.rails) {
       for (var a = 0; a < data.rails.length; a++) {
         var rl = data.rails[a]
-        if (rl.state === "ACTIVE" && rl.settledUpto && rl.paymentRate !== "0") {
-          var diff = currentEpoch - Number(rl.settledUpto)
+        if (rl.state === "ACTIVE" && rl.paymentRate !== "0") {
+          var since = Number(rl.settledUpto) > 0 ? Number(rl.settledUpto) : chainEpoch(Number(rl.createdAt))
+          var diff = currentEpoch - since
           if (diff > 0) expectedSettlement += diff * Number(rl.paymentRate) / 1e18
         }
       }
     }
-    var totalSettled = Number(acct.fundsCollected || 0) / 1e18
+    var totalSettled = Number(s.totalSettled || 0) / 1e18
     var totalRevenue = totalSettled + expectedSettlement
 
     var wallet = data.wallet || {}
@@ -382,7 +389,7 @@ async function loadEconomics(sp) {
     ]) + summaryGrid([
       { label: "Total Settled", value: "$" + totalSettled.toFixed(2), cls: "amber" },
       { label: "Total Revenue", value: "$" + totalRevenue.toFixed(2) },
-      { label: "Last Settlement", value: acct.lastSettled ? formatTime(new Date(Number(acct.lastSettled) * 1000).toISOString()) : '-' },
+      { label: "Last Settlement", value: Number(acct.lastSettled) > 0 ? formatTime(new Date(Number(acct.lastSettled) * 1000).toISOString()) : '-' },
       { label: "USDFC Balance", value: wallet.usdfc != null ? "$" + wallet.usdfc.toFixed(4) : "--" },
     ])
 
@@ -489,10 +496,11 @@ async function showRailModal(spId, railId) {
     var created = r.createdAt ? formatTime(new Date(Number(r.createdAt) * 1000).toISOString()) : '-'
 
     // Calculate accrued since last settlement
-    var currentEpoch = Math.floor((Date.now() / 1000 - 1598306400) / 30)
+    var currentEpoch = chainEpoch(Date.now() / 1000)
     var accrued = 0
-    if (r.state === "ACTIVE" && r.settledUpto && r.paymentRate !== "0") {
-      var diff = currentEpoch - Number(r.settledUpto)
+    if (r.state === "ACTIVE" && r.paymentRate !== "0") {
+      var since = Number(r.settledUpto) > 0 ? Number(r.settledUpto) : chainEpoch(Number(r.createdAt))
+      var diff = currentEpoch - since
       if (diff > 0) accrued = diff * Number(r.paymentRate) / 1e18
     }
 
