@@ -621,6 +621,7 @@ app.get("/api/network/performance", async (req, res) => {
             tags['providerId'] AS providerId,
             if(startsWith(tags['value'], 'failure'), 'failure',
               tags['value']) AS status,
+            series_id,
             avgMerge(value_avg) AS inner_value
           FROM ${DEALBOT_METRICS}
           WHERE name = '${metricName}'
@@ -630,17 +631,15 @@ app.get("/api/network/performance", async (req, res) => {
             ${ctFilter}
           GROUP BY time, providerId, status, series_id
         ),
-        series_values AS (
-          SELECT time, providerId, status, sum(inner_value) AS value
-          FROM raw GROUP BY time, providerId, status
-        ),
         series_deltas AS (
           SELECT providerId, status,
-            if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
+            if(isNull(prev_value), 0, greatest(inner_value - prev_value, 0)) AS delta
           FROM (
-            SELECT time, providerId, status, value,
-              lagInFrame(value) OVER (PARTITION BY providerId, status ORDER BY time) AS prev_value
-            FROM series_values
+            SELECT time, providerId, status, series_id, inner_value,
+              lagInFrame(inner_value) OVER (
+                PARTITION BY providerId, status, series_id ORDER BY time
+              ) AS prev_value
+            FROM raw
           )
         )
         SELECT providerId, '${checkType}' AS checkType, status AS value, toUInt64(round(sum(delta))) AS cnt
