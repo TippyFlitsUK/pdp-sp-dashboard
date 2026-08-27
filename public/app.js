@@ -15,6 +15,52 @@ function getHours() {
   return selectedHours
 }
 
+// URL state. The hash carries page/SP/tab; the query string carries the
+// controls (network, time ranges) so any view can be bookmarked or reloaded.
+var VALID_NETWORKS = ["mainnet", "calibration"]
+var VALID_HOURS = [1, 6, 24, 72, 168]
+var DEFAULT_HOURS = { logHours: 24, perfHours: 72, activityHours: 24 }
+
+function readHoursParam(params, key) {
+  var v = parseInt(params.get(key), 10)
+  return VALID_HOURS.indexOf(v) === -1 ? DEFAULT_HOURS[key] : v
+}
+
+function readUrlState() {
+  var params = new URLSearchParams(window.location.search)
+  var net = params.get("network")
+  if (VALID_NETWORKS.indexOf(net) !== -1) selectedNetwork = net
+  selectedHours = readHoursParam(params, "logHours")
+  selectedPerfHours = readHoursParam(params, "perfHours")
+  selectedActivityHours = readHoursParam(params, "activityHours")
+}
+
+function syncUrl() {
+  var params = new URLSearchParams()
+  params.set("network", selectedNetwork)
+  if (selectedHours !== DEFAULT_HOURS.logHours) params.set("logHours", selectedHours)
+  if (selectedPerfHours !== DEFAULT_HOURS.perfHours) params.set("perfHours", selectedPerfHours)
+  if (selectedActivityHours !== DEFAULT_HOURS.activityHours) params.set("activityHours", selectedActivityHours)
+  history.replaceState(null, "", window.location.pathname + "?" + params.toString() + window.location.hash)
+}
+
+function markHoursActive(containerId, hours) {
+  var container = document.getElementById(containerId)
+  if (!container) return
+  container.querySelectorAll("button").forEach(function(b) {
+    b.classList.toggle("active", Number(b.dataset.hours) === hours)
+  })
+}
+
+function applyUrlStateToControls() {
+  document.querySelectorAll(".net-btn").forEach(function(b) {
+    b.classList.toggle("active", b.dataset.network === selectedNetwork)
+  })
+  markHoursActive("time-range-btns", selectedHours)
+  markHoursActive("perf-time-range-btns", selectedPerfHours)
+  markHoursActive("activity-time-range-btns", selectedActivityHours)
+}
+
 function apiUrl(path) {
   var sep = path.indexOf("?") === -1 ? "?" : "&"
   var url = path + sep + "network=" + selectedNetwork
@@ -128,6 +174,10 @@ function switchTab(tab) {
 }
 
 function initRouter() {
+  readUrlState()
+  applyUrlStateToControls()
+  syncUrl()
+
   async function onRoute() {
     var route = getRoute()
     var overviewSection = document.getElementById("section-overview")
@@ -176,6 +226,7 @@ function initRouter() {
     var btns = document.querySelectorAll("#time-range-btns button")
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
+    syncUrl()
     if (currentSP && (currentSP.logHealth || currentSP.curioVersion || currentSP.hasLogs)) {
       spDataCache.logs = false
       Promise.all([loadLogsSummary(currentSP), loadSPTimeline(currentSP), loadSPErrors(currentSP), loadSPPatterns(currentSP), loadSPLogs(currentSP)]).catch(function() {})
@@ -191,6 +242,7 @@ function initRouter() {
     var btns = document.querySelectorAll("#perf-time-range-btns button")
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
+    syncUrl()
     if (currentSP) { spDataCache.performance = null; loadPerformance(currentSP) }
   })
 
@@ -203,6 +255,7 @@ function initRouter() {
     var btns = document.querySelectorAll("#activity-time-range-btns button")
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
+    syncUrl()
     if (currentSP) { spDataCache.activity = null; loadActivity(currentSP) }
   })
 
@@ -212,6 +265,7 @@ function initRouter() {
     var net = e.target.dataset.network
     if (!net || net === selectedNetwork) return
     selectedNetwork = net
+    syncUrl()
     var btns = document.querySelectorAll(".net-btn")
     btns.forEach(function(b) { b.classList.toggle("active", b.dataset.network === net) })
     spConfig = []
