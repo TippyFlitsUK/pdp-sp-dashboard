@@ -552,11 +552,15 @@ app.get("/api/sp/:id/activity", async (req, res) => {
   }
 })
 
-// Dealbot counter delta SQL — matches Better Stack dashboard pattern exactly:
+// Dealbot counter delta SQL. The counters are cumulative per series, so the
+// delta must be taken PER series and only then summed. Summing across series
+// first makes a pod rollover — where an old and a new series overlap for one
+// bucket — look like a single huge increment, and greatest(delta, 0) keeps
+// that spike while discarding the compensating drop.
 // 1. avgMerge(value_avg) grouped by series_id to get per-pod values
-// 2. sum() across series to get total per time bucket
-// 3. lagInFrame to compute deltas between consecutive buckets
-// 4. greatest(delta, 0) to handle counter resets
+// 2. lagInFrame partitioned by (status, series_id) for a per-series delta
+// 3. greatest(delta, 0) to handle counter resets
+// 4. sum() the deltas across series and buckets
 function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter, metricsTable) {
   const ctFilter = checkTypeFilter
     ? `AND tags['checkType'] = '${checkTypeFilter}'`
@@ -566,6 +570,7 @@ function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter, met
       SELECT toStartOfFiveMinutes(dt) AS time,
         if(startsWith(tags['value'], 'failure'), 'failure',
           tags['value']) AS status,
+        series_id,
         avgMerge(value_avg) AS inner_value
       FROM ${metricsTable}
       WHERE name = '${metricName}'
@@ -575,17 +580,15 @@ function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter, met
         ${ctFilter}
       GROUP BY time, status, series_id
     ),
-    series_values AS (
-      SELECT time, status, sum(inner_value) AS value
-      FROM raw GROUP BY time, status
-    ),
     series_deltas AS (
       SELECT status,
-        if(isNull(prev_value), 0, greatest(value - prev_value, 0)) AS delta
+        if(isNull(prev_value), 0, greatest(inner_value - prev_value, 0)) AS delta
       FROM (
-        SELECT time, status, value,
-          lagInFrame(value) OVER (PARTITION BY status ORDER BY time) AS prev_value
-        FROM series_values
+        SELECT time, status, series_id, inner_value,
+          lagInFrame(inner_value) OVER (
+            PARTITION BY status, series_id ORDER BY time
+          ) AS prev_value
+        FROM raw
       )
     )
     SELECT status AS value, toUInt64(round(sum(delta))) AS cnt
