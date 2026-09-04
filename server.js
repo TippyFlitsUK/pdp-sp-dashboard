@@ -112,184 +112,7 @@ app.get("/api/network/overview", async (req, res) => {
   if (cached) return res.json(cached)
 
   try {
-    const CLIENT_IDS = await getClientIds(network)
-    // Parallel fetch all data sources
-    const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions] = await Promise.all([
-      // Per-provider PDP rollup — sourced from foc-observer indexed events
-      pdp.getAllProvidersRollup(network).catch(err => {
-        console.error("getAllProvidersRollup error:", err.message)
-        return []
-      }),
-
-      // FilecoinPay active rails — by-payee aggregate from observer indexed events
-      filpay.getAllActiveRailsByPayee(network).catch(err => {
-        console.error("getAllActiveRailsByPayee error:", err.message)
-        return {}
-      }),
-
-      // Dealbot test counts last 72h — proves liveness even when an SP has no chain activity
-      observerGet(`/metrics/providers/${toObserverNetwork(network)}?hours=72`).catch(err => {
-        console.error("dealbot metrics error:", err.message)
-        return { providers: [] }
-      }),
-
-      // Better Stack overview (tracked SPs)
-      CLIENT_IDS ? queryBetterStack(`
-        SELECT
-          JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
-          CASE WHEN ${CID_CONTACT_FILTER} THEN 'cid.contact'
-               ELSE JSONExtract(raw, 'level', 'Nullable(String)') END AS level,
-          count(*) AS cnt,
-          max(dt) AS last_seen
-        FROM (
-          SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
-          WHERE dt > now() - INTERVAL 24 HOUR
-            AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
-            AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
-            AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
-            ${SUPPRESS_FILTER}
-          UNION ALL
-          SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
-          WHERE _row_type = 1
-            AND dt > now() - INTERVAL 24 HOUR
-            AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
-            AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
-            AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
-            ${SUPPRESS_FILTER}
-        )
-        GROUP BY sp, level
-        FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
-
-      // Better Stack curio versions — prefer build tag matching this network, fall back to latest
-      CLIENT_IDS ? queryBetterStack(`
-        SELECT
-          JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
-          coalesce(
-            argMaxIf(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt,
-              JSONExtract(raw, 'curio_version', 'Nullable(String)') LIKE '%+${network === "calibration" ? "calibnet" : "mainnet"}+%'),
-            argMax(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt)
-          ) AS curio_version
-        FROM (
-          SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
-          WHERE dt > now() - INTERVAL 24 HOUR
-            AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
-            AND JSONExtract(raw, 'curio_version', 'Nullable(String)') IS NOT NULL
-            AND JSONExtract(raw, 'curio_version', 'Nullable(String)') NOT IN ('', 'Error parsing language')
-          UNION ALL
-          SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
-          WHERE _row_type = 1
-            AND dt > now() - INTERVAL 24 HOUR
-            AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
-            AND JSONExtract(raw, 'curio_version', 'Nullable(String)') IS NOT NULL
-            AND JSONExtract(raw, 'curio_version', 'Nullable(String)') NOT IN ('', 'Error parsing language')
-        )
-        GROUP BY sp
-        FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
-    ])
-
-    // Build per-provider index from PDP Scan (keyed by lowercase address)
-    const providerMap = {}
-    for (const p of pdpProviders) {
-      providerMap[p.address.toLowerCase()] = {
-        pdp: {
-          proofSets: Number(p.totalProofSets || 0),
-          roots: Number(p.totalRoots || 0),
-          dataSize: p.totalDataSize || "0",
-          faultedPeriods: Number(p.totalFaultedPeriods || 0),
-          provingPeriods: Number(p.totalProvingPeriods || 0),
-          lastActivity: p.lastActivity || null,
-        },
-      }
-    }
-
-    // filpayRails is already keyed by lowercase payee with subgraph-shaped totals.
-    const railsByPayee = filpayRails
-
-    // Better Stack log counts by SP
-    const bsByClient = {}
-    for (const row of bsOverview) {
-      if (!bsByClient[row.sp]) bsByClient[row.sp] = { errors: 0, warns: 0, info: 0, cid_contact: 0, last_seen: null }
-      if (row.level === "error") bsByClient[row.sp].errors += row.cnt
-      else if (row.level === "warn") bsByClient[row.sp].warns += row.cnt
-      else if (row.level === "info") bsByClient[row.sp].info += row.cnt
-      else if (row.level === "cid.contact") bsByClient[row.sp].cid_contact += row.cnt
-      if (row.last_seen) {
-        if (!bsByClient[row.sp].last_seen || row.last_seen > bsByClient[row.sp].last_seen) {
-          bsByClient[row.sp].last_seen = row.last_seen
-        }
-      }
-    }
-
-    // Curio versions
-    const versionByClient = {}
-    for (const v of bsVersions) {
-      versionByClient[v.sp] = v.curio_version
-    }
-
-    // Build dealbot-tested set: any SP with deal or retrieval tests in last 72h is alive.
-    // Treat this as the strongest liveness signal — overrides chain-event-based dormant flag.
-    const dealbotTested = new Set()
-    for (const p of (dealbotMetrics.providers || [])) {
-      const total = Number(p.totalDeals || 0) + Number(p.totalIpfsRetrievals || 0)
-      if (total > 0) dealbotTested.add(String(p.providerId))
-    }
-
-    // Merge all into SP list
-    const liveness = getLiveness(network)
-    const allSps = await getAllSPs(network)
-    const nowSec = Math.floor(Date.now() / 1000)
-    const dormantCutoff = nowSec - DORMANT_DAYS * 86400
-    const result = allSps.map(sp => {
-      const addr = lc(sp.address)
-      const pdp = providerMap[addr]?.pdp || null
-      const rails = railsByPayee[addr]
-      const bs = sp.hasLogs ? bsByClient[sp.clientId] || null : null
-      const version = sp.hasLogs ? versionByClient[sp.clientId] || null : null
-      const isDealbotTested = dealbotTested.has(String(sp.id))
-
-      // Activity status: dealbot test traffic > chain-event recency > nothing.
-      //   registered-no-activity = no datasets AND no dealbot tests
-      //   dormant = had datasets but chain activity is stale AND no dealbot tests
-      //   active = recent chain activity OR dealbot is currently testing
-      let lastActivity = pdp?.lastActivity || 0
-      if (isDealbotTested) lastActivity = Math.max(lastActivity, nowSec)
-      let activityStatus
-      if (isDealbotTested) {
-        activityStatus = "active"
-      } else if (!pdp || pdp.proofSets === 0) {
-        activityStatus = "registered-no-activity"
-      } else if (lastActivity < dormantCutoff) {
-        activityStatus = "dormant"
-      } else {
-        activityStatus = "active"
-      }
-
-      return {
-        id: sp.id,
-        name: sp.name,
-        address: sp.address,
-        hasLogs: sp.hasLogs,
-        endorsed: sp.endorsed || false,
-        liveness: liveness[sp.id] || null,
-        pdp,
-        lastActivity: lastActivity || null,
-        activityStatus,
-        economics: rails ? {
-          activeRails: rails.activeRails,
-          totalRate: rails.totalRate.toString(),
-          totalSettled: rails.totalSettled.toString(),
-        } : null,
-        logHealth: bs,
-        curioVersion: version,
-      }
-    })
-
-    // Stable id-ascending order. The frontend regroups cards by dealbot activity
-    // using the same performance feed it renders from, so display order always
-    // matches each card's activity state. (Tiering here on the observer rollup
-    // could lag the BS-direct card data and strand a freshly-active SP at the end.)
-    result.sort((a, b) => a.id - b.id)
-
+    const result = await buildOverview(network)
     cache.set(cacheKey, result, BS_TTL)
     res.json(result)
   } catch (err) {
@@ -297,6 +120,188 @@ app.get("/api/network/overview", async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+
+async function buildOverview(network) {
+  const CLIENT_IDS = await getClientIds(network)
+  // Parallel fetch all data sources
+  const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions] = await Promise.all([
+    // Per-provider PDP rollup — sourced from foc-observer indexed events
+    pdp.getAllProvidersRollup(network).catch(err => {
+      console.error("getAllProvidersRollup error:", err.message)
+      return []
+    }),
+
+    // FilecoinPay active rails — by-payee aggregate from observer indexed events
+    filpay.getAllActiveRailsByPayee(network).catch(err => {
+      console.error("getAllActiveRailsByPayee error:", err.message)
+      return {}
+    }),
+
+    // Dealbot test counts last 72h — proves liveness even when an SP has no chain activity
+    observerGet(`/metrics/providers/${toObserverNetwork(network)}?hours=72`).catch(err => {
+      console.error("dealbot metrics error:", err.message)
+      return { providers: [] }
+    }),
+
+    // Better Stack overview (tracked SPs)
+    CLIENT_IDS ? queryBetterStack(`
+      SELECT
+        JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
+        CASE WHEN ${CID_CONTACT_FILTER} THEN 'cid.contact'
+             ELSE JSONExtract(raw, 'level', 'Nullable(String)') END AS level,
+        count(*) AS cnt,
+        max(dt) AS last_seen
+      FROM (
+        SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
+        WHERE dt > now() - INTERVAL 24 HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
+          AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
+          AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
+          ${SUPPRESS_FILTER}
+        UNION ALL
+        SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
+        WHERE _row_type = 1
+          AND dt > now() - INTERVAL 24 HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
+          AND JSONExtract(raw, 'level', 'Nullable(String)') IS NOT NULL
+          AND JSONExtract(raw, 'level', 'Nullable(String)') != ''
+          ${SUPPRESS_FILTER}
+      )
+      GROUP BY sp, level
+      FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
+
+    // Better Stack curio versions — prefer build tag matching this network, fall back to latest
+    CLIENT_IDS ? queryBetterStack(`
+      SELECT
+        JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
+        coalesce(
+          argMaxIf(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt,
+            JSONExtract(raw, 'curio_version', 'Nullable(String)') LIKE '%+${network === "calibration" ? "calibnet" : "mainnet"}+%'),
+          argMax(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt)
+        ) AS curio_version
+      FROM (
+        SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
+        WHERE dt > now() - INTERVAL 24 HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
+          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') IS NOT NULL
+          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') NOT IN ('', 'Error parsing language')
+        UNION ALL
+        SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
+        WHERE _row_type = 1
+          AND dt > now() - INTERVAL 24 HOUR
+          AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
+          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') IS NOT NULL
+          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') NOT IN ('', 'Error parsing language')
+      )
+      GROUP BY sp
+      FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
+  ])
+
+  // Build per-provider index from PDP Scan (keyed by lowercase address)
+  const providerMap = {}
+  for (const p of pdpProviders) {
+    providerMap[p.address.toLowerCase()] = {
+      pdp: {
+        proofSets: Number(p.totalProofSets || 0),
+        roots: Number(p.totalRoots || 0),
+        dataSize: p.totalDataSize || "0",
+        faultedPeriods: Number(p.totalFaultedPeriods || 0),
+        provingPeriods: Number(p.totalProvingPeriods || 0),
+        lastActivity: p.lastActivity || null,
+      },
+    }
+  }
+
+  // filpayRails is already keyed by lowercase payee with subgraph-shaped totals.
+  const railsByPayee = filpayRails
+
+  // Better Stack log counts by SP
+  const bsByClient = {}
+  for (const row of bsOverview) {
+    if (!bsByClient[row.sp]) bsByClient[row.sp] = { errors: 0, warns: 0, info: 0, cid_contact: 0, last_seen: null }
+    if (row.level === "error") bsByClient[row.sp].errors += row.cnt
+    else if (row.level === "warn") bsByClient[row.sp].warns += row.cnt
+    else if (row.level === "info") bsByClient[row.sp].info += row.cnt
+    else if (row.level === "cid.contact") bsByClient[row.sp].cid_contact += row.cnt
+    if (row.last_seen) {
+      if (!bsByClient[row.sp].last_seen || row.last_seen > bsByClient[row.sp].last_seen) {
+        bsByClient[row.sp].last_seen = row.last_seen
+      }
+    }
+  }
+
+  // Curio versions
+  const versionByClient = {}
+  for (const v of bsVersions) {
+    versionByClient[v.sp] = v.curio_version
+  }
+
+  // Build dealbot-tested set: any SP with deal or retrieval tests in last 72h is alive.
+  // Treat this as the strongest liveness signal — overrides chain-event-based dormant flag.
+  const dealbotTested = new Set()
+  for (const p of (dealbotMetrics.providers || [])) {
+    const total = Number(p.totalDeals || 0) + Number(p.totalIpfsRetrievals || 0)
+    if (total > 0) dealbotTested.add(String(p.providerId))
+  }
+
+  // Merge all into SP list
+  const liveness = getLiveness(network)
+  const allSps = await getAllSPs(network)
+  const nowSec = Math.floor(Date.now() / 1000)
+  const dormantCutoff = nowSec - DORMANT_DAYS * 86400
+  const result = allSps.map(sp => {
+    const addr = lc(sp.address)
+    const pdp = providerMap[addr]?.pdp || null
+    const rails = railsByPayee[addr]
+    const bs = sp.hasLogs ? bsByClient[sp.clientId] || null : null
+    const version = sp.hasLogs ? versionByClient[sp.clientId] || null : null
+    const isDealbotTested = dealbotTested.has(String(sp.id))
+
+    // Activity status: dealbot test traffic > chain-event recency > nothing.
+    //   registered-no-activity = no datasets AND no dealbot tests
+    //   dormant = had datasets but chain activity is stale AND no dealbot tests
+    //   active = recent chain activity OR dealbot is currently testing
+    let lastActivity = pdp?.lastActivity || 0
+    if (isDealbotTested) lastActivity = Math.max(lastActivity, nowSec)
+    let activityStatus
+    if (isDealbotTested) {
+      activityStatus = "active"
+    } else if (!pdp || pdp.proofSets === 0) {
+      activityStatus = "registered-no-activity"
+    } else if (lastActivity < dormantCutoff) {
+      activityStatus = "dormant"
+    } else {
+      activityStatus = "active"
+    }
+
+    return {
+      id: sp.id,
+      name: sp.name,
+      address: sp.address,
+      hasLogs: sp.hasLogs,
+      endorsed: sp.endorsed || false,
+      liveness: liveness[sp.id] || null,
+      pdp,
+      lastActivity: lastActivity || null,
+      activityStatus,
+      economics: rails ? {
+        activeRails: rails.activeRails,
+        totalRate: rails.totalRate.toString(),
+        totalSettled: rails.totalSettled.toString(),
+      } : null,
+      logHealth: bs,
+      curioVersion: version,
+    }
+  })
+
+  // Stable id-ascending order. The frontend regroups cards by dealbot activity
+  // using the same performance feed it renders from, so display order always
+  // matches each card's activity state. (Tiering here on the observer rollup
+  // could lag the BS-direct card data and strand a freshly-active SP at the end.)
+  result.sort((a, b) => a.id - b.id)
+
+  return result
+}
 
 // --- SP Detail Routes ---
 
@@ -601,70 +606,12 @@ function dealbotDeltaSql(metricName, hours, providerFilter, checkTypeFilter, met
 // GET /api/network/performance — bulk dealbot performance for all providers (72h for 200-sample SLA)
 app.get("/api/network/performance", async (req, res) => {
   const network = parseNetwork(req)
-  const DEALBOT_METRICS = getDealbotMetrics(network)
   const cacheKey = `network:performance:${network}`
   const cached = getCached(req, cacheKey)
   if (cached) return res.json(cached)
 
-  const networkFilter = network === "mainnet"
-    ? `AND tags['network'] = 'mainnet'`
-    : ""
-
   try {
-    function bulkDeltaSql(metricName, checkType, checkTypeFilter) {
-      const ctFilter = checkTypeFilter
-        ? `AND tags['checkType'] = '${checkTypeFilter}'`
-        : ""
-      return `
-        WITH raw AS (
-          SELECT toStartOfFiveMinutes(dt) AS time,
-            tags['providerId'] AS providerId,
-            if(startsWith(tags['value'], 'failure'), 'failure',
-              tags['value']) AS status,
-            series_id,
-            avgMerge(value_avg) AS inner_value
-          FROM ${DEALBOT_METRICS}
-          WHERE name = '${metricName}'
-            AND dt > now() - INTERVAL 72 HOUR
-            AND tags['value'] != 'pending'
-            ${networkFilter}
-            ${ctFilter}
-          GROUP BY time, providerId, status, series_id
-        ),
-        series_deltas AS (
-          SELECT providerId, status,
-            if(isNull(prev_value), 0, greatest(inner_value - prev_value, 0)) AS delta
-          FROM (
-            SELECT time, providerId, status, series_id, inner_value,
-              lagInFrame(inner_value) OVER (
-                PARTITION BY providerId, status, series_id ORDER BY time
-              ) AS prev_value
-            FROM raw
-          )
-        )
-        SELECT providerId, '${checkType}' AS checkType, status AS value, toUInt64(round(sum(delta))) AS cnt
-        FROM series_deltas
-        GROUP BY providerId, status
-        FORMAT JSONEachRow`
-    }
-
-    const [storageRows, retrievalRows] = await Promise.all([
-      queryDealbot(bulkDeltaSql("dataStorageStatus", "dataStorage", null)),
-      queryDealbot(bulkDeltaSql("retrievalStatus", "retrieval", "retrieval")),
-    ])
-
-    const rows = [...storageRows, ...retrievalRows]
-
-    // Aggregate per provider
-    const byProvider = {}
-    for (const r of rows) {
-      const pid = r.providerId
-      if (!byProvider[pid]) byProvider[pid] = {}
-      if (!byProvider[pid][r.checkType]) byProvider[pid][r.checkType] = { success: 0, failed: 0 }
-      if (r.value === "success") byProvider[pid][r.checkType].success += r.cnt
-      else if (r.value === "failure") byProvider[pid][r.checkType].failed += r.cnt
-    }
-
+    const byProvider = await buildPerformance(network)
     cache.set(cacheKey, byProvider, DEALBOT_TTL)
     res.json(byProvider)
   } catch (err) {
@@ -672,6 +619,69 @@ app.get("/api/network/performance", async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+
+async function buildPerformance(network) {
+  const DEALBOT_METRICS = getDealbotMetrics(network)
+  const networkFilter = network === "mainnet"
+    ? `AND tags['network'] = 'mainnet'`
+    : ""
+
+  function bulkDeltaSql(metricName, checkType, checkTypeFilter) {
+    const ctFilter = checkTypeFilter
+      ? `AND tags['checkType'] = '${checkTypeFilter}'`
+      : ""
+    return `
+      WITH raw AS (
+        SELECT toStartOfFiveMinutes(dt) AS time,
+          tags['providerId'] AS providerId,
+          if(startsWith(tags['value'], 'failure'), 'failure',
+            tags['value']) AS status,
+          series_id,
+          avgMerge(value_avg) AS inner_value
+        FROM ${DEALBOT_METRICS}
+        WHERE name = '${metricName}'
+          AND dt > now() - INTERVAL 72 HOUR
+          AND tags['value'] != 'pending'
+          ${networkFilter}
+          ${ctFilter}
+        GROUP BY time, providerId, status, series_id
+      ),
+      series_deltas AS (
+        SELECT providerId, status,
+          if(isNull(prev_value), 0, greatest(inner_value - prev_value, 0)) AS delta
+        FROM (
+          SELECT time, providerId, status, series_id, inner_value,
+            lagInFrame(inner_value) OVER (
+              PARTITION BY providerId, status, series_id ORDER BY time
+            ) AS prev_value
+          FROM raw
+        )
+      )
+      SELECT providerId, '${checkType}' AS checkType, status AS value, toUInt64(round(sum(delta))) AS cnt
+      FROM series_deltas
+      GROUP BY providerId, status
+      FORMAT JSONEachRow`
+  }
+
+  const [storageRows, retrievalRows] = await Promise.all([
+    queryDealbot(bulkDeltaSql("dataStorageStatus", "dataStorage", null)),
+    queryDealbot(bulkDeltaSql("retrievalStatus", "retrieval", "retrieval")),
+  ])
+
+  const rows = [...storageRows, ...retrievalRows]
+
+  // Aggregate per provider
+  const byProvider = {}
+  for (const r of rows) {
+    const pid = r.providerId
+    if (!byProvider[pid]) byProvider[pid] = {}
+    if (!byProvider[pid][r.checkType]) byProvider[pid][r.checkType] = { success: 0, failed: 0 }
+    if (r.value === "success") byProvider[pid][r.checkType].success += r.cnt
+    else if (r.value === "failure") byProvider[pid][r.checkType].failed += r.cnt
+  }
+
+  return byProvider
+}
 
 // GET /api/sp/:id/performance — dealbot Prometheus metrics (Better Stack infra_prod)
 app.get("/api/sp/:id/performance", async (req, res) => {
@@ -1165,8 +1175,36 @@ app.get("/api/sp/:id/timeline", async (req, res) => {
   }
 })
 
+// --- Background cache warming ---
+
+const WARM_NETWORKS = ["mainnet", "calibration"]
+const WARM_INTERVAL = 4 * 60 * 1000
+const WARM_TTL = 15 * 60 * 1000
+const WARM_TARGETS = [
+  ["network:overview", buildOverview],
+  ["network:performance", buildPerformance],
+]
+
+async function warmCaches() {
+  for (const network of WARM_NETWORKS) {
+    for (const [prefix, build] of WARM_TARGETS) {
+      const key = `${prefix}:${network}`
+      const start = Date.now()
+      try {
+        const result = await build(network)
+        cache.set(key, result, WARM_TTL)
+        console.log(`warm ${key}: ok (${Date.now() - start}ms)`)
+      } catch (err) {
+        console.error(`warm ${key}: ${err.message} (${Date.now() - start}ms), keeping previous entry`)
+      }
+    }
+  }
+}
+
 // Start server
 startLivenessProbes()
+warmCaches()
+setInterval(warmCaches, WARM_INTERVAL)
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`PDP SP Dashboard running on http://0.0.0.0:${PORT}`)
 })
