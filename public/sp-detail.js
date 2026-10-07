@@ -11,6 +11,7 @@ function chainEpoch(unixSeconds) {
 async function loadSPDetail(sp) {
   var titleEl = document.getElementById("detail-title")
   titleEl.innerHTML = sp.name + ' (ID ' + sp.id + ')' +
+    (sp.approved ? ' <span class="badge approved" style="margin-left:8px">APPROVED</span>' : '') +
     (sp.endorsed ? ' <span class="badge endorsed" style="margin-left:8px">ENDORSED</span>' : '') +
     (sp.curioVersion ? '<span class="detail-version">' + escapeHtml(sp.curioVersion) + '</span>' : '<span class="detail-version" style="opacity:0.5">No logs</span>')
   spDataCache = {}
