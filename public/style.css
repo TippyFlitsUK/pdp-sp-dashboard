@@ -904,6 +904,31 @@ td.level-info { color: var(--accent); }
 }
 .sp-addr:hover { opacity: 0.8; }
 
+.sp-home-url {
+  padding: 4px 16px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sp-url, .detail-url {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.sp-url:hover, .detail-url:hover { color: var(--accent); text-decoration: underline; }
+.sp-url.muted, .detail-url.muted { opacity: 0.5; }
+.sp-url.muted:hover, .detail-url.muted:hover { color: var(--text-muted); text-decoration: none; }
+
+.detail-url {
+  margin-left: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 400;
+  vertical-align: middle;
+}
+
 .sp-home-metrics {
   padding: 10px 16px 6px;
 }
@@ -1094,6 +1119,8 @@ td.level-info { color: var(--accent); }
   .sp-home-stat .stat-value { font-size: 16px; }
 
   .sp-home-footer { padding: 6px 12px; font-size: 9px; }
+
+  .sp-home-url { padding: 4px 12px 0; }
 
   /* Summary grid: 2-col wrap, smaller cards */
   .summary-grid {

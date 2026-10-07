@@ -87,6 +87,13 @@ function truncate(str, len) {
   return str.length > len ? str.slice(0, len) + "..." : str
 }
 
+function spUrlLink(sp, cls) {
+  var url = sp.serviceURL || ""
+  if (!/^https?:\/\//i.test(url)) return '<span class="' + cls + ' muted">No service URL</span>'
+  var text = url.replace(/^https?:\/\//i, "").replace(/\/+$/, "")
+  return '<a class="' + cls + '" href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer" title="' + escapeHtml(url) + '">' + escapeHtml(text) + '</a>'
+}
+
 function formatNum(n) {
   if (n == null) return "-"
   n = Number(n)

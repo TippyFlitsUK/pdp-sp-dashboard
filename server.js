@@ -281,6 +281,7 @@ async function buildOverview(network) {
       hasLogs: sp.hasLogs,
       endorsed: sp.endorsed || false,
       approved: sp.approved || false,
+      serviceURL: sp.serviceURL || null,
       liveness: liveness[sp.id] || null,
       pdp,
       lastActivity: lastActivity || null,

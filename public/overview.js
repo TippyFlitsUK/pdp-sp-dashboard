@@ -106,7 +106,8 @@ function renderSPGrid(container, providers, perfData) {
         '<span class="sp-addr" title="' + escapeHtml(sp.address) + ' (click to copy)" data-addr="' + escapeHtml(sp.address) + '">' + escapeHtml(sp.address ? sp.address.slice(0, 6) + "…" + sp.address.slice(-4) : "") + '</span>' +
       '</div>' +
       '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">' + (sp.approved ? '<span class="badge approved">APPROVED</span>' : '') + (sp.endorsed ? '<span class="badge endorsed">ENDORSED</span>' : '') + '<span class="sp-id">ID ' + sp.id + '</span></div>' +
-    '</div>'
+    '</div>' +
+    '<div class="sp-home-url">' + spUrlLink(sp, "sp-url") + '</div>'
 
     // Performance only
     html += '<div class="sp-home-metrics">' +
@@ -137,7 +138,7 @@ function renderSPGrid(container, providers, perfData) {
 
   container.querySelectorAll(".sp-home-card").forEach(function(card) {
     card.addEventListener("click", function(e) {
-      if (e.target.classList.contains("sp-addr")) return
+      if (e.target.classList.contains("sp-addr") || e.target.closest("a.sp-url")) return
       navigate("#sp/" + card.dataset.spid)
     })
   })
