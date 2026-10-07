@@ -41,15 +41,18 @@ function renderSPGrid(container, providers, perfData) {
   // so a card's activity state and its position can never disagree. (The server's
   // observer-rollup signal can lag the BS-direct card data and briefly strand a
   // freshly-active SP at the bottom.) Active first, then everyone else; id asc within.
-  function spHasDealbot(sp) {
+  function spIsActive(sp) {
     var perf = perfData[String(sp.id)] || {}
     var ds = perf["dataStorage"] || { success: 0, failed: 0 }
     var rt = perf["retrieval"] || { success: 0, failed: 0 }
-    return (ds.success + ds.failed + rt.success + rt.failed) > 0
+    var tests = ds.success + ds.failed + rt.success + rt.failed
+    var successes = ds.success + rt.success
+    var unreachable = heartbeatClass(sp.liveness) === "dead"
+    return tests > 0 && !(successes === 0 && unreachable)
   }
   providers = providers.slice().sort(function(a, b) {
-    var aRank = spHasDealbot(a) ? 0 : 1
-    var bRank = spHasDealbot(b) ? 0 : 1
+    var aRank = spIsActive(a) ? 0 : 1
+    var bRank = spIsActive(b) ? 0 : 1
     if (aRank !== bRank) return aRank - bRank
     return a.id - b.id
   })
@@ -76,9 +79,8 @@ function renderSPGrid(container, providers, perfData) {
     var rtSLA = rtPct !== "N/A" && parseFloat(rtPct) >= 97 && rtTotal >= 200
     var allPass = dsSLA && rtSLA
 
-    // No dealbot activity → greyed; both SLAs pass → green; otherwise red.
-    var hasDealbot = (dsTotal + rtTotal) > 0
-    var statusCls = !hasDealbot ? "status-offline" : (allPass ? "status-healthy" : "status-error")
+    // No dealbot activity, or no successes and a dead ping → greyed; both SLAs pass → green; otherwise red.
+    var statusCls = !spIsActive(sp) ? "status-offline" : (allPass ? "status-healthy" : "status-error")
 
     // Proving
     var faults = pdp.faultedPeriods || 0
