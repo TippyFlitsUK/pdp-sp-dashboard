@@ -103,9 +103,9 @@ function renderSPGrid(container, providers, perfData) {
         '<span class="heartbeat-dot ' + bulletCls + '"></span>' +
         '<span class="sp-home-name">' + escapeHtml(sp.name) + '</span>' +
         '<span class="sp-period">72h</span>' +
-        '<span class="sp-addr" title="Click to copy" data-addr="' + escapeHtml(sp.address) + '">' + escapeHtml(sp.address) + '</span>' +
+        '<span class="sp-addr" title="' + escapeHtml(sp.address) + ' (click to copy)" data-addr="' + escapeHtml(sp.address) + '">' + escapeHtml(sp.address ? sp.address.slice(0, 6) + "…" + sp.address.slice(-4) : "") + '</span>' +
       '</div>' +
-      '<div style="display:flex;align-items:center;gap:6px">' + (sp.endorsed ? '<span class="badge endorsed">ENDORSED</span>' : '') + '<span class="sp-id">ID ' + sp.id + '</span></div>' +
+      '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">' + (sp.approved ? '<span class="badge approved">APPROVED</span>' : '') + (sp.endorsed ? '<span class="badge endorsed">ENDORSED</span>' : '') + '<span class="sp-id">ID ' + sp.id + '</span></div>' +
     '</div>'
 
     // Performance only
