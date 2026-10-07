@@ -889,7 +889,6 @@ td.level-info { color: var(--accent); }
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   color: var(--text-muted);
-  opacity: 0.5;
   letter-spacing: 0.04em;
 }
 
@@ -897,12 +896,11 @@ td.level-info { color: var(--accent); }
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   color: var(--text-muted);
-  opacity: 0.4;
   cursor: pointer;
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
-.sp-addr:hover { opacity: 0.8; }
+.sp-addr:hover { color: var(--text-secondary); }
 
 .sp-home-url {
   padding: 4px 16px 0;
