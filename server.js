@@ -11,6 +11,7 @@ const { startLivenessProbes, getLiveness } = require("./lib/liveness")
 const { getDataSetInfoBatch } = require("./lib/fwss")
 const { getWalletBalances } = require("./lib/wallet")
 const { observerStatus, observerGet, toObserverNetwork, OBSERVER_URL } = require("./lib/observer")
+const { getDealbotScheduledIds } = require("./lib/dealbot-providers")
 const pdp = require("./lib/pdp")
 const filpay = require("./lib/filpay")
 
@@ -124,7 +125,7 @@ app.get("/api/network/overview", async (req, res) => {
 async function buildOverview(network) {
   const CLIENT_IDS = await getClientIds(network)
   // Parallel fetch all data sources
-  const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions] = await Promise.all([
+  const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions, dealbotScheduledIds] = await Promise.all([
     // Per-provider PDP rollup — sourced from foc-observer indexed events
     pdp.getAllProvidersRollup(network).catch(err => {
       console.error("getAllProvidersRollup error:", err.message)
@@ -195,6 +196,8 @@ async function buildOverview(network) {
       )
       GROUP BY sp
       FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
+
+    getDealbotScheduledIds(network),
   ])
 
   // Build per-provider index from PDP Scan (keyed by lowercase address)
@@ -286,6 +289,7 @@ async function buildOverview(network) {
       pdp,
       lastActivity: lastActivity || null,
       activityStatus,
+      dealbotScheduled: dealbotScheduledIds ? dealbotScheduledIds.has(String(sp.id)) : null,
       economics: rails ? {
         activeRails: rails.activeRails,
         totalRate: rails.totalRate.toString(),

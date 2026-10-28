@@ -42,6 +42,7 @@ function renderSPGrid(container, providers, perfData) {
   // observer-rollup signal can lag the BS-direct card data and briefly strand a
   // freshly-active SP at the bottom.) Active first, then everyone else; id asc within.
   function spIsActive(sp) {
+    if (sp.dealbotScheduled === false) return false
     var perf = perfData[String(sp.id)] || {}
     var ds = perf["dataStorage"] || { success: 0, failed: 0 }
     var rt = perf["retrieval"] || { success: 0, failed: 0 }
