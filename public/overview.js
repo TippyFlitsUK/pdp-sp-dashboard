@@ -58,10 +58,12 @@ function renderSPGrid(container, providers, perfData) {
     return a.id - b.id
   })
 
-  var html = '<div class="panel" style="padding:20px 24px">'
-  html += '<div class="sp-home-grid">'
+  var activeHtml = ''
+  var inactiveHtml = ''
+  var inactiveCount = 0
 
   for (var i = 0; i < providers.length; i++) {
+    var html = ''
     var sp = providers[i]
     var pdp = sp.pdp || {}
     var econ = sp.economics || {}
@@ -132,10 +134,23 @@ function renderSPGrid(container, providers, perfData) {
     '</div>'
 
     html += '</div>'
+
+    if (statusCls === "status-offline") {
+      inactiveHtml += html
+      inactiveCount++
+    } else {
+      activeHtml += html
+    }
   }
 
-  html += '</div></div>'
-  container.innerHTML = html
+  var out = '<div class="panel" style="padding:20px 24px"><div class="sp-home-grid">' + activeHtml + '</div></div>'
+  if (inactiveCount > 0) {
+    out += '<details class="panel sp-inactive-section">' +
+      '<summary>Inactive providers <span class="sp-inactive-count">' + inactiveCount + '</span></summary>' +
+      '<div class="sp-home-grid">' + inactiveHtml + '</div>' +
+    '</details>'
+  }
+  container.innerHTML = out
 
   container.querySelectorAll(".sp-home-card").forEach(function(card) {
     card.addEventListener("click", function(e) {

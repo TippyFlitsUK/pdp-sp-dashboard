@@ -861,6 +861,35 @@ td.level-info { color: var(--accent); }
 
 .sp-home-card.status-offline { opacity: 0.55; }
 
+.sp-inactive-section { padding: 0; }
+.sp-inactive-section > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 16px 24px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+.sp-inactive-section > summary::-webkit-details-marker { display: none; }
+.sp-inactive-section > summary::before {
+  content: "\25B8";
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+.sp-inactive-section[open] > summary::before { transform: rotate(90deg); }
+.sp-inactive-section > summary:hover { color: var(--accent); }
+.sp-inactive-count {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.sp-inactive-section > .sp-home-grid { padding: 0 24px 20px; }
+
 .sp-home-header {
   display: flex;
   justify-content: space-between;
