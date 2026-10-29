@@ -375,7 +375,7 @@ async function loadEconomics(sp) {
     ]) + summaryGrid([
       { label: "Total Revenue", value: usdFromWei(earn.revenue) },
       { label: "Last Settlement", value: earn.lastSettledAt ? formatTime(new Date(earn.lastSettledAt * 1000).toISOString()) : '-' },
-      { label: "USDFC Balance (FilecoinPay)", value: usdFromWei(acct.funds) },
+      { label: "USDFC Pay Balance", value: usdFromWei(acct.funds) },
     ])
 
     if (data.rails && data.rails.length > 0) {
