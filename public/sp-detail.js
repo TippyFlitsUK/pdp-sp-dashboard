@@ -365,22 +365,18 @@ async function loadEconomics(sp) {
     var earn = data.earnings || {}
     var wallet = data.wallet || {}
 
-    // Every figure is read from indexed events or the FilecoinPay account: what
-    // reached the SP (net rail settlements plus net one-time payments), what it
-    // withdrew, and what is still in its FilecoinPay account.
+    // Read from indexed events and the FilecoinPay account, net of the network
+    // fee: Total Settled is rail settlements, Total Revenue adds one-time payments.
     var html = summaryGrid([
       { label: "Active Rails", value: formatNum(s.activeRails) },
       { label: "Total Rails", value: formatNum(s.totalRails) },
+      { label: "Last 2 Weeks Revenue", value: usdFromWei(earn.revenue14d), cls: "green" },
       { label: "FIL Balance", value: wallet.fil != null ? wallet.fil.toFixed(4) + " FIL" : "--" },
-      { label: "USDFC Wallet", value: wallet.usdfc != null ? "$" + wallet.usdfc.toFixed(4) : "--" },
     ]) + summaryGrid([
-      { label: "Total Earned", value: usdFromWei(earn.earned), cls: "green" },
-      { label: "Rail Settlements", value: usdFromWei(earn.settledNet) },
-      { label: "One-time Payments", value: usdFromWei(earn.oneTimeNet) },
-    ]) + summaryGrid([
-      { label: "Withdrawn", value: usdFromWei(earn.withdrawn) },
-      { label: "FilecoinPay Balance", value: usdFromWei(acct.funds) },
-      { label: "Last Rail Settlement", value: earn.lastSettledAt ? formatTime(new Date(earn.lastSettledAt * 1000).toISOString()) : '-' },
+      { label: "Total Settled", value: usdFromWei(earn.settledNet), cls: "amber" },
+      { label: "Total Revenue", value: usdFromWei(earn.revenue) },
+      { label: "Last Settlement", value: earn.lastSettledAt ? formatTime(new Date(earn.lastSettledAt * 1000).toISOString()) : '-' },
+      { label: "USDFC Balance (FilecoinPay)", value: usdFromWei(acct.funds) },
     ])
 
     if (data.rails && data.rails.length > 0) {
@@ -401,7 +397,6 @@ async function loadEconomics(sp) {
         '<th class="sortable" data-col="railid">Rail ID</th>' +
         '<th class="sortable" data-col="state">State</th>' +
         '<th class="sortable" data-col="settled">Settled</th>' +
-        '<th class="sortable" data-col="onetime">One-time</th>' +
         '<th class="sortable" data-col="settlements">Settlements</th>' +
         '<th>Payer</th>' +
       '</tr></thead><tbody id="econ-tbody">'
@@ -412,13 +407,11 @@ async function loadEconomics(sp) {
         html += '<tr data-state="' + r.state + '"' +
           ' data-railid="' + Number(r.railId) + '"' +
           ' data-settled="' + Number(r.netSettledAmount || 0) + '"' +
-          ' data-onetime="' + Number(r.netOneTimeAmount || 0) + '"' +
           ' data-settlements="' + Number(r.totalSettlements || 0) + '"' +
         '>' +
           '<td>' + r.railId + '</td>' +
           '<td><span class="badge ' + stateClass + '">' + r.state + '</span></td>' +
           '<td>' + formatWei(r.netSettledAmount) + '</td>' +
-          '<td>' + formatWei(r.netOneTimeAmount) + '</td>' +
           '<td>' + (r.totalSettlements || '0') + '</td>' +
           '<td>' + escapeHtml(r.payer ? r.payer.id : '-') + '</td>' +
         '</tr>'
@@ -505,8 +498,7 @@ async function showRailModal(spId, railId) {
       '<h4>Payment</h4>' +
       '<div class="dd-row"><span>Rate</span><span>' + formatRate(r.paymentRate) + '</span></div>' +
       '<div class="dd-row"><span>Settled Upto</span><span>Epoch ' + Number(r.settledUpto || 0).toLocaleString() + '</span></div>' +
-      '<div class="dd-row"><span>Settled to SP</span><span>' + formatWei(r.netSettledAmount) + '</span></div>' +
-      '<div class="dd-row"><span>One-time Payments</span><span>' + formatWei(r.netOneTimeAmount) + ' (' + (r.totalOneTimePayments || 0) + ')</span></div>' +
+      '<div class="dd-row"><span>Total Settled</span><span>' + formatWei(r.netSettledAmount) + '</span></div>' +
       '<div class="dd-row"><span>Lockup Period</span><span>' + Number(r.lockupPeriod || 0).toLocaleString() + 's</span></div>' +
       '<div class="dd-row"><span>Lockup Fixed</span><span>' + formatWei(r.lockupFixed) + '</span></div>' +
       '<div class="dd-row"><span>Total Settlements</span><span>' + (r.totalSettlements || '0') + '</span></div>' +
@@ -577,7 +569,7 @@ async function loadRevenue(sp) {
     if (existing) existing.remove()
     var chartSection = document.createElement("div")
     chartSection.id = "revenue-chart-section"
-    chartSection.innerHTML = '<h4 style="font-size:11px;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500">Total Earned Over Time</h4>' +
+    chartSection.innerHTML = '<h4 style="font-size:11px;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500">Total Revenue Over Time</h4>' +
       '<div class="chart-container"><canvas id="revenue-canvas"></canvas></div>'
 
     // Insert before the first table-scroll (the rails table)
@@ -594,7 +586,7 @@ async function loadRevenue(sp) {
       return parts[1] + "/" + parts[2]
     })
     drawLineChart(canvas, [
-      { name: "Total earned (USDFC)", color: "#00d68f", data: cumulative },
+      { name: "Total Revenue (USDFC)", color: "#00d68f", data: cumulative },
     ], { labels: labels, emptyText: "No settlement data" })
   } catch (err) {
     // silently fail — chart is supplementary
