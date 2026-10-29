@@ -124,6 +124,16 @@ function formatRate(weiPerEpoch) {
   return "$" + perDay.toFixed(4) + "/day"
 }
 
+// Wei string (18 decimals) to "$1,234.56", rounded to the cent in BigInt so
+// four-figure totals keep every digit.
+function usdFromWei(wei) {
+  var v = BigInt(String(wei || "0").split(".")[0])
+  var cents = (v + BigInt("5000000000000000")) / BigInt("10000000000000000")
+  var whole = (cents / BigInt(100)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  var frac = (cents % BigInt(100)).toString().padStart(2, "0")
+  return "$" + whole + "." + frac
+}
+
 function formatWei(wei) {
   if (!wei) return "$0"
   var s = String(wei).padStart(19, "0")

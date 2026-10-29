@@ -388,16 +388,12 @@ app.get("/api/sp/:id/economics", async (req, res) => {
 
   try {
     const addr = lc(sp.address)
-    const [rails, account, walletBalances] = await Promise.all([
+    const [rails, earnings, account, walletBalances] = await Promise.all([
       filpay.getSpRails(network, addr),
+      filpay.getSpEarnings(network, addr),
       filpay.getAccount(network, addr),
       getWalletBalances(addr, network).catch(() => null),
     ])
-
-    let totalSettled = BigInt(0)
-    for (const r of rails) {
-      totalSettled += BigInt(r.totalSettledAmount || 0)
-    }
 
     const result = {
       rails,
@@ -409,8 +405,8 @@ app.get("/api/sp/:id/economics", async (req, res) => {
       summary: {
         activeRails: rails.filter(r => r.state === "ACTIVE").length,
         totalRails: rails.length,
-        totalSettled: totalSettled.toString(),
       },
+      earnings,
       wallet: walletBalances,
     }
 
