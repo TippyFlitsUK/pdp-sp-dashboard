@@ -366,14 +366,13 @@ async function loadEconomics(sp) {
     var wallet = data.wallet || {}
 
     // Read from indexed events and the FilecoinPay account, net of the network
-    // fee: Total Settled is rail settlements, Total Revenue adds one-time payments.
+    // fee: Total Revenue is rail settlements plus one-time payments.
     var html = summaryGrid([
       { label: "Active Rails", value: formatNum(s.activeRails) },
       { label: "Total Rails", value: formatNum(s.totalRails) },
       { label: "Last 2 Weeks Revenue", value: usdFromWei(earn.revenue14d), cls: "green" },
       { label: "FIL Balance", value: wallet.fil != null ? wallet.fil.toFixed(4) + " FIL" : "--" },
     ]) + summaryGrid([
-      { label: "Total Settled", value: usdFromWei(earn.settledNet), cls: "amber" },
       { label: "Total Revenue", value: usdFromWei(earn.revenue) },
       { label: "Last Settlement", value: earn.lastSettledAt ? formatTime(new Date(earn.lastSettledAt * 1000).toISOString()) : '-' },
       { label: "USDFC Balance (FilecoinPay)", value: usdFromWei(acct.funds) },
