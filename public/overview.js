@@ -91,10 +91,6 @@ function renderSPGrid(container, providers, perfData) {
     var provingTotal = proofs + faults
     var provingPct = provingTotal > 0 ? ((proofs / provingTotal) * 100).toFixed(1) : "N/A"
 
-    // Ping
-    var pingText = sp.liveness && sp.liveness.alive ? sp.liveness.latencyMs + 'ms'
-      : sp.liveness && sp.liveness.alive === false ? 'Offline' : '...'
-
     // Bullet color matches SLA
     var bulletCls = allPass ? "alive" : (dsTotal === 0 && rtTotal === 0) ? "unknown" : "dead"
 
@@ -110,8 +106,12 @@ function renderSPGrid(container, providers, perfData) {
       '</div>' +
       '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">' + (sp.approved ? '<span class="badge approved">APPROVED</span>' : '') + (sp.endorsed ? '<span class="badge endorsed">ENDORSED</span>' : '') + '<span class="sp-id">ID ' + sp.id + '</span></div>' +
     '</div>' +
-    '<div class="sp-home-url">' + spUrlLink(sp, "sp-url") +
-      (sp.region ? '<span class="sp-region" title="' + escapeHtml(sp.location || '') + '">' + escapeHtml(sp.region) + '</span>' : '') +
+    '<div class="sp-home-place">' +
+      '<div class="sp-place-item sp-place-url"><span class="stat-label">Service URL</span>' + spUrlLink(sp, "sp-url") + '</div>' +
+      '<div class="sp-place-item"><span class="stat-label">Region</span>' +
+        (sp.region ? '<span class="sp-place-value" title="' + escapeHtml(sp.location || '') + '">' + escapeHtml(sp.region) + '</span>'
+                   : '<span class="sp-place-value muted">Not set</span>') +
+      '</div>' +
     '</div>'
 
     // Performance only
@@ -128,19 +128,12 @@ function renderSPGrid(container, providers, perfData) {
         spStat("Failed", formatNum(rt.failed), rt.failed > 0 ? "errors" : "zero") +
         spStat("SLA", rtSLA ? "PASS" : rtTotal === 0 ? "--" : "FAIL", rtSLA ? "sla-pass" : rtTotal > 0 ? "sla-fail" : "muted") +
       '</div>' +
-      // Capacity is what the provider advertises in the registry (capacityTiB), blank where unset;
-      // Stored is raw bytes in its live FWSS and Storacha data sets; Headroom is the difference.
-      '<div class="sp-home-row">' +
-        spStat("Capacity, advertised", sp.capacityTiB != null ? formatNum(sp.capacityTiB) + " TiB" : "&nbsp;", "") +
-        spStat("Stored", sp.storedBytes != null ? formatBytes(sp.storedBytes) : "&nbsp;", "") +
-        spStat("Headroom", sp.headroomBytes == null ? "&nbsp;" : Number(sp.headroomBytes) < 0 ? "-" + formatBytes(-Number(sp.headroomBytes)) : formatBytes(sp.headroomBytes),
-          sp.headroomBytes != null && Number(sp.headroomBytes) < 0 ? "rate-bad" : "") +
-      '</div>' +
-    '</div>'
+    '</div>' +
+    capacityBlock(sp)
 
     // Footer - full curio version
     html += '<div class="sp-home-footer">' +
-      '<span>' + (sp.curioVersion ? escapeHtml(sp.curioVersion) : sp.logHealth ? pingText : '<span style="color:var(--text-muted);opacity:0.5">No logs</span>') + '</span>' +
+      '<span>' + (sp.curioVersion ? 'Curio ' + escapeHtml(sp.curioVersion) : '<span style="color:var(--text-muted);opacity:0.5">Version unknown</span>') + '</span>' +
     '</div>'
 
     html += '</div>'
@@ -183,6 +176,29 @@ function renderSPGrid(container, providers, perfData) {
       })
     })
   })
+}
+
+// Capacity strip: Advertised is the registry's capacityTiB (blank where the provider has not
+// set it), Stored is raw bytes in its live FWSS and Storacha data sets, Headroom and Used
+// compare the two. All in TiB so the figures compare at a glance.
+function capacityBlock(sp) {
+  var TIB = 1099511627776
+  var cap = sp.capacityTiB
+  var stored = sp.storedBytes != null ? Number(sp.storedBytes) / TIB : null
+  var head = sp.headroomBytes != null ? Number(sp.headroomBytes) / TIB : null
+  var used = cap ? stored / cap * 100 : null
+  var usedText = used == null ? "" : used > 0 && used < 0.1 ? "<0.1%" : used.toFixed(1) + "%"
+  var level = used == null ? "" : used > 100 ? "over" : used >= 80 ? "high" : ""
+  var blank = '<span class="cap-blank">&nbsp;</span>'
+  return '<div class="sp-home-capacity">' +
+    '<div class="sp-home-row sp-home-row-4">' +
+      '<div class="sp-home-stat" title="Capacity the provider advertises in the registry (capacityTiB)"><span class="stat-label">Advertised</span><span class="stat-value">' + (cap != null ? formatNum(cap) + ' TiB' : blank) + '</span></div>' +
+      '<div class="sp-home-stat"><span class="stat-label">Stored</span><span class="stat-value">' + (stored != null ? (stored > 0 && stored < 0.005 ? '<0.01' : stored.toFixed(2)) + ' TiB' : blank) + '</span></div>' +
+      '<div class="sp-home-stat"><span class="stat-label">Headroom</span><span class="stat-value' + (head != null && head < 0 ? ' rate-bad' : '') + '">' + (head != null ? head.toFixed(2) + ' TiB' : blank) + '</span></div>' +
+      '<div class="sp-home-stat"><span class="stat-label">Used</span><span class="stat-value">' + (usedText || blank) + '</span></div>' +
+    '</div>' +
+    (used != null ? '<div class="cap-bar ' + level + '"><span style="width:' + Math.min(100, used).toFixed(1) + '%"></span></div>' : '') +
+  '</div>'
 }
 
 function spStat(label, value, cls) {

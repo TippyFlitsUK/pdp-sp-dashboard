@@ -244,7 +244,7 @@ function initRouter() {
     btns.forEach(function(b) { b.classList.remove("active") })
     e.target.classList.add("active")
     syncUrl()
-    if (currentSP && (currentSP.logHealth || currentSP.curioVersion || currentSP.hasLogs)) {
+    if (currentSP && (currentSP.logHealth || currentSP.hasLogs)) {
       spDataCache.logs = false
       Promise.all([loadLogsSummary(currentSP), loadSPTimeline(currentSP), loadSPErrors(currentSP), loadSPPatterns(currentSP), loadSPLogs(currentSP)]).catch(function() {})
     }
@@ -330,7 +330,7 @@ function initRouter() {
 
   // Log level filter (delegated, element is dynamically created)
   document.getElementById("panel-logs").addEventListener("change", function(e) {
-    if (e.target.id === "log-level-filter" && currentSP && (currentSP.logHealth || currentSP.curioVersion || currentSP.hasLogs)) {
+    if (e.target.id === "log-level-filter" && currentSP && (currentSP.logHealth || currentSP.hasLogs)) {
       loadSPLogs(currentSP)
     }
   })

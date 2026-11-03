@@ -7,7 +7,7 @@ const {
   queryBetterStack, queryDealbot, validateHours, timeBucket, getDealbotMetrics,
   RECENT_TABLE, HISTORICAL_TABLE, COMMON_COLS, SUPPRESS_FILTER, CID_CONTACT_FILTER,
 } = require("./lib/betterstack")
-const { startLivenessProbes, getLiveness } = require("./lib/liveness")
+const { startLivenessProbes, getLiveness, getVersions } = require("./lib/liveness")
 const { getDataSetInfoBatch } = require("./lib/fwss")
 const { getWalletBalances } = require("./lib/wallet")
 const { observerStatus, observerGet, toObserverNetwork, OBSERVER_URL } = require("./lib/observer")
@@ -125,7 +125,7 @@ app.get("/api/network/overview", async (req, res) => {
 async function buildOverview(network) {
   const CLIENT_IDS = await getClientIds(network)
   // Parallel fetch all data sources
-  const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions, dealbotScheduledIds, storedByAddr] = await Promise.all([
+  const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, dealbotScheduledIds, storedByAddr] = await Promise.all([
     // Per-provider PDP rollup — sourced from foc-observer indexed events
     pdp.getAllProvidersRollup(network).catch(err => {
       console.error("getAllProvidersRollup error:", err.message)
@@ -171,32 +171,6 @@ async function buildOverview(network) {
       GROUP BY sp, level
       FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
 
-    // Better Stack curio versions — prefer build tag matching this network, fall back to latest
-    CLIENT_IDS ? queryBetterStack(`
-      SELECT
-        JSONExtract(raw, 'client_id', 'Nullable(String)') AS sp,
-        coalesce(
-          argMaxIf(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt,
-            JSONExtract(raw, 'curio_version', 'Nullable(String)') LIKE '%+${network === "calibration" ? "calibnet" : "mainnet"}+%'),
-          argMax(JSONExtract(raw, 'curio_version', 'Nullable(String)'), dt)
-        ) AS curio_version
-      FROM (
-        SELECT ${COMMON_COLS} FROM ${RECENT_TABLE}
-        WHERE dt > now() - INTERVAL 24 HOUR
-          AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
-          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') IS NOT NULL
-          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') NOT IN ('', 'Error parsing language')
-        UNION ALL
-        SELECT ${COMMON_COLS} FROM ${HISTORICAL_TABLE}
-        WHERE _row_type = 1
-          AND dt > now() - INTERVAL 24 HOUR
-          AND JSONExtract(raw, 'client_id', 'Nullable(String)') IN (${CLIENT_IDS})
-          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') IS NOT NULL
-          AND JSONExtract(raw, 'curio_version', 'Nullable(String)') NOT IN ('', 'Error parsing language')
-      )
-      GROUP BY sp
-      FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
-
     getDealbotScheduledIds(network),
 
     // Raw bytes in each provider's live FWSS and Storacha data sets: the last background
@@ -237,11 +211,8 @@ async function buildOverview(network) {
     }
   }
 
-  // Curio versions
-  const versionByClient = {}
-  for (const v of bsVersions) {
-    versionByClient[v.sp] = v.curio_version
-  }
+  // Curio versions, from each SP's own /version endpoint (logs or not)
+  const versions = getVersions(network)
 
   // Build dealbot-tested set: any SP with deal or retrieval tests in last 72h is alive.
   // Treat this as the strongest liveness signal — overrides chain-event-based dormant flag.
@@ -261,7 +232,7 @@ async function buildOverview(network) {
     const pdp = providerMap[addr]?.pdp || null
     const rails = railsByPayee[addr]
     const bs = sp.hasLogs ? bsByClient[sp.clientId] || null : null
-    const version = sp.hasLogs ? versionByClient[sp.clientId] || null : null
+    const version = versions[sp.id] || null
     const isDealbotTested = dealbotTested.has(String(sp.id))
     const storedBytes = storedByAddr ? storedByAddr[addr] || "0" : null
     const headroomBytes = sp.capacityTiB != null && storedBytes != null

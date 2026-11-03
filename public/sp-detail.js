@@ -14,7 +14,7 @@ async function loadSPDetail(sp) {
     (sp.approved ? ' <span class="badge approved" style="margin-left:8px">APPROVED</span>' : '') +
     (sp.endorsed ? ' <span class="badge endorsed" style="margin-left:8px">ENDORSED</span>' : '') +
     spUrlLink(sp, "detail-url") +
-    (sp.curioVersion ? '<span class="detail-version">' + escapeHtml(sp.curioVersion) + '</span>' : '<span class="detail-version" style="opacity:0.5">No logs</span>')
+    (sp.curioVersion ? '<span class="detail-version">Curio ' + escapeHtml(sp.curioVersion) + '</span>' : '<span class="detail-version" style="opacity:0.5">Version unknown</span>')
   spDataCache = {}
 
   // Always show logs tab
@@ -56,7 +56,7 @@ async function loadTabData(tab, sp) {
     await loadEconomics(sp)
     loadRevenue(sp)
   } else if (tab === "logs" && !spDataCache.logs) {
-    if (sp.logHealth || sp.curioVersion || sp.hasLogs) {
+    if (sp.logHealth || sp.hasLogs) {
       document.getElementById("timeline-container").style.display = ''
       await Promise.all([loadLogsSummary(sp), loadSPTimeline(sp), loadSPErrors(sp), loadSPPatterns(sp), loadSPLogs(sp)])
     } else {
