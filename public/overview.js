@@ -150,7 +150,9 @@ function renderSPGrid(container, providers, perfData) {
       '<div class="sp-home-grid">' + inactiveHtml + '</div>' +
     '</details>'
   }
+  out += renderCapacityTable(providers, spIsActive)
   container.innerHTML = out
+  wireSortable("capacity-table")
 
   container.querySelectorAll(".sp-home-card").forEach(function(card) {
     card.addEventListener("click", function(e) {
@@ -173,6 +175,44 @@ function renderSPGrid(container, providers, perfData) {
       })
     })
   })
+}
+
+// Region and capacity per provider, in card order. Capacity is the registry's capacityTiB as
+// the provider advertises it, blank where unset; Stored is raw bytes in its live FWSS and
+// Storacha data sets; Headroom is the difference, negative when it stores more than it advertises.
+function renderCapacityTable(providers, spIsActive) {
+  var TIB = 1099511627776
+  function signedBytes(v) {
+    var n = Number(v)
+    return n < 0 ? '<span class="rate-bad">-' + formatBytes(-n) + '</span>' : formatBytes(n)
+  }
+  var rows = providers.map(function(sp) {
+    var cap = sp.capacityTiB
+    return '<tr class="' + (spIsActive(sp) ? '' : 'capacity-inactive') + '"' +
+      ' data-id="' + sp.id + '"' +
+      ' data-name="' + escapeHtml((sp.name || '').toLowerCase()) + '"' +
+      ' data-region="' + escapeHtml((sp.region || '').toLowerCase()) + '"' +
+      ' data-capacity="' + (cap != null ? cap * TIB : '') + '"' +
+      ' data-stored="' + (sp.storedBytes != null ? Number(sp.storedBytes) : '') + '"' +
+      ' data-headroom="' + (sp.headroomBytes != null ? Number(sp.headroomBytes) : '') + '"' +
+    '>' +
+      '<td>' + sp.id + '</td>' +
+      '<td class="capacity-name" title="' + escapeHtml(sp.name) + '">' + escapeHtml(sp.name) + '</td>' +
+      '<td title="' + escapeHtml(sp.location || '') + '">' + escapeHtml(sp.region || '') + '</td>' +
+      '<td>' + (cap != null ? formatNum(cap) + ' TiB' : '') + '</td>' +
+      '<td>' + (sp.storedBytes != null ? formatBytes(sp.storedBytes) : '') + '</td>' +
+      '<td>' + (sp.headroomBytes != null ? signedBytes(sp.headroomBytes) : '') + '</td>' +
+    '</tr>'
+  }).join('')
+  return '<div class="panel"><h3>Region and capacity</h3>' +
+    '<div class="table-scroll"><table id="capacity-table"><thead><tr>' +
+      '<th class="sortable" data-col="id">ID</th>' +
+      '<th class="sortable" data-col="name">Provider</th>' +
+      '<th class="sortable" data-col="region">Region</th>' +
+      '<th class="sortable" data-col="capacity">Capacity, advertised</th>' +
+      '<th class="sortable" data-col="stored">Stored</th>' +
+      '<th class="sortable" data-col="headroom">Headroom</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div></div>'
 }
 
 function spStat(label, value, cls) {

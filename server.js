@@ -125,7 +125,7 @@ app.get("/api/network/overview", async (req, res) => {
 async function buildOverview(network) {
   const CLIENT_IDS = await getClientIds(network)
   // Parallel fetch all data sources
-  const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions, dealbotScheduledIds] = await Promise.all([
+  const [pdpProviders, filpayRails, dealbotMetrics, bsOverview, bsVersions, dealbotScheduledIds, storedByAddr] = await Promise.all([
     // Per-provider PDP rollup — sourced from foc-observer indexed events
     pdp.getAllProvidersRollup(network).catch(err => {
       console.error("getAllProvidersRollup error:", err.message)
@@ -198,6 +198,10 @@ async function buildOverview(network) {
       FORMAT JSONEachRow`).catch(() => []) : Promise.resolve([]),
 
     getDealbotScheduledIds(network),
+
+    // Raw bytes in each provider's live FWSS and Storacha data sets: the last background
+    // result (refreshed every 30 minutes), null until the first one lands
+    Promise.resolve(pdp.getStoredByProvider(network)),
   ])
 
   // Build per-provider index from PDP Scan (keyed by lowercase address)
@@ -259,6 +263,9 @@ async function buildOverview(network) {
     const bs = sp.hasLogs ? bsByClient[sp.clientId] || null : null
     const version = sp.hasLogs ? versionByClient[sp.clientId] || null : null
     const isDealbotTested = dealbotTested.has(String(sp.id))
+    const storedBytes = storedByAddr ? storedByAddr[addr] || "0" : null
+    const headroomBytes = sp.capacityTiB != null && storedBytes != null
+      ? (BigInt(sp.capacityTiB) * 1099511627776n - BigInt(storedBytes)).toString() : null
 
     // Activity status: dealbot test traffic > chain-event recency > nothing.
     //   registered-no-activity = no datasets AND no dealbot tests
@@ -285,6 +292,11 @@ async function buildOverview(network) {
       endorsed: sp.endorsed || false,
       approved: sp.approved || false,
       serviceURL: sp.serviceURL || null,
+      location: sp.location,
+      region: sp.region,
+      capacityTiB: sp.capacityTiB,
+      storedBytes,
+      headroomBytes,
       liveness: liveness[sp.id] || null,
       pdp,
       lastActivity: lastActivity || null,

@@ -1253,3 +1253,7 @@ td.level-info { color: var(--accent); }
   /* Log controls */
   .log-controls { flex-wrap: wrap; }
 }
+
+/* ===== Region and capacity table (overview) ===== */
+#capacity-table td.capacity-name { text-align: left; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#capacity-table tr.capacity-inactive td { opacity: 0.55; }
