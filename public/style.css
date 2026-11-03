@@ -1254,6 +1254,7 @@ td.level-info { color: var(--accent); }
   .log-controls { flex-wrap: wrap; }
 }
 
-/* ===== Region and capacity table (overview) ===== */
-#capacity-table td.capacity-name { text-align: left; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#capacity-table tr.capacity-inactive td { opacity: 0.55; }
+/* Region beside the service URL on overview cards; the URL truncates first */
+.sp-home-url { display: flex; gap: 10px; }
+.sp-home-url .sp-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sp-home-url .sp-region { margin-left: auto; flex-shrink: 0; color: var(--text-muted); }
