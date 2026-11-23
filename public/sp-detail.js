@@ -10,7 +10,7 @@ function chainEpoch(unixSeconds) {
 
 async function loadSPDetail(sp) {
   var titleEl = document.getElementById("detail-title")
-  titleEl.innerHTML = sp.name + ' (ID ' + sp.id + ')' +
+  titleEl.innerHTML = escapeHtml(sp.name) + ' (ID ' + sp.id + ')' +
     (sp.approved ? ' <span class="badge approved" style="margin-left:8px">APPROVED</span>' : '') +
     (sp.endorsed ? ' <span class="badge endorsed" style="margin-left:8px">ENDORSED</span>' : '') +
     spUrlLink(sp, "detail-url") +
@@ -856,7 +856,7 @@ function showLogModal(type, index) {
     html = '<div class="dataset-detail-grid">' +
       '<div class="dd-section">' +
         '<h4>Summary</h4>' +
-        '<div class="dd-row"><span>Level</span><span class="level-' + (item.level || "") + '">' + (item.level || "-") + '</span></div>' +
+        '<div class="dd-row"><span>Level</span><span class="level-' + escapeHtml(item.level || "") + '">' + escapeHtml(item.level || "-") + '</span></div>' +
         '<div class="dd-row"><span>Logger</span><span>' + escapeHtml(item.logger || "-") + '</span></div>' +
         '<div class="dd-row"><span>Count</span><span>' + formatNum(item.cnt) + '</span></div>' +
         '<div class="dd-row"><span>Last Seen</span><span>' + formatTime(item.last_seen) + '</span></div>' +
@@ -912,7 +912,7 @@ function showLogModal(type, index) {
     html = '<div class="dataset-detail-grid">' +
       '<div class="dd-section">' +
         '<h4>Details</h4>' +
-        '<div class="dd-row"><span>Level</span><span class="level-' + (item.level || "") + '">' + (item.level || "-") + '</span></div>' +
+        '<div class="dd-row"><span>Level</span><span class="level-' + escapeHtml(item.level || "") + '">' + escapeHtml(item.level || "-") + '</span></div>' +
         '<div class="dd-row"><span>Logger</span><span>' + escapeHtml(item.logger || "-") + '</span></div>' +
         '<div class="dd-row"><span>Count</span><span>' + formatNum(item.cnt) + '</span></div>' +
         '<div class="dd-row"><span>First Seen</span><span>' + formatTime(item.first_seen) + '</span></div>' +
@@ -932,7 +932,7 @@ function showLogModal(type, index) {
       '<div class="dd-section">' +
         '<h4>Details</h4>' +
         '<div class="dd-row"><span>Time</span><span>' + d.toLocaleString() + '</span></div>' +
-        '<div class="dd-row"><span>Level</span><span class="level-' + (item.level || "") + '">' + (item.level || "-") + '</span></div>' +
+        '<div class="dd-row"><span>Level</span><span class="level-' + escapeHtml(item.level || "") + '">' + escapeHtml(item.level || "-") + '</span></div>' +
         '<div class="dd-row"><span>Logger</span><span>' + escapeHtml(item.logger || "-") + '</span></div>' +
         (item.taskID ? '<div class="dd-row"><span>Task ID</span><span>' + item.taskID + '</span></div>' : '') +
       '</div>' +
@@ -1033,9 +1033,9 @@ async function loadSPErrors(sp) {
       var pct = Math.round((e.cnt / maxCnt) * 100)
       var barClass = e.level === "warn" ? "warn" : ""
       var lsTs = e.last_seen ? new Date(e.last_seen + (e.last_seen.includes("Z") ? "" : "Z")).getTime() : 0
-      html += '<tr data-idx="' + i + '" data-cnt="' + e.cnt + '" data-level="' + (e.level || "") + '" data-logger="' + escapeHtml(e.logger || "") + '" data-msg="' + escapeHtml(e.msg || "") + '" data-err="' + escapeHtml(e.err || "") + '" data-lastseen="' + lsTs + '">' +
+      html += '<tr data-idx="' + i + '" data-cnt="' + e.cnt + '" data-level="' + escapeHtml(e.level || "") + '" data-logger="' + escapeHtml(e.logger || "") + '" data-msg="' + escapeHtml(e.msg || "") + '" data-err="' + escapeHtml(e.err || "") + '" data-lastseen="' + lsTs + '">' +
         '<td><div class="pattern-bar"><span>' + formatNum(e.cnt) + '</span><div class="pattern-bar-fill ' + barClass + '" style="width:' + pct + 'px"></div></div></td>' +
-        '<td class="level-' + (e.level || "") + '">' + (e.level || "-") + '</td>' +
+        '<td class="level-' + escapeHtml(e.level || "") + '">' + escapeHtml(e.level || "-") + '</td>' +
         '<td>' + escapeHtml(e.logger || "-") + '</td>' +
         '<td title="' + escapeHtml(e.msg || "") + '">' + escapeHtml(truncate(e.msg || "-", 80)) + '</td>' +
         '<td title="' + escapeHtml(e.err || "") + '">' + escapeHtml(truncate(e.err || "-", 60)) + '</td>' +
@@ -1083,9 +1083,9 @@ async function loadSPPatterns(sp) {
       var barClass = p.level === "warn" ? "warn" : ""
       var fsTs = p.first_seen ? new Date(p.first_seen + (p.first_seen.includes("Z") ? "" : "Z")).getTime() : 0
       var lsTs = p.last_seen ? new Date(p.last_seen + (p.last_seen.includes("Z") ? "" : "Z")).getTime() : 0
-      html += '<tr data-idx="' + i + '" data-cnt="' + p.cnt + '" data-level="' + (p.level || "") + '" data-logger="' + escapeHtml(p.logger || "") + '" data-pattern="' + escapeHtml(p.pattern || "") + '" data-firstseen="' + fsTs + '" data-lastseen="' + lsTs + '">' +
+      html += '<tr data-idx="' + i + '" data-cnt="' + p.cnt + '" data-level="' + escapeHtml(p.level || "") + '" data-logger="' + escapeHtml(p.logger || "") + '" data-pattern="' + escapeHtml(p.pattern || "") + '" data-firstseen="' + fsTs + '" data-lastseen="' + lsTs + '">' +
         '<td><div class="pattern-bar"><span>' + formatNum(p.cnt) + '</span><div class="pattern-bar-fill ' + barClass + '" style="width:' + pct + 'px"></div></div></td>' +
-        '<td class="level-' + (p.level || "") + '">' + (p.level || "-") + '</td>' +
+        '<td class="level-' + escapeHtml(p.level || "") + '">' + escapeHtml(p.level || "-") + '</td>' +
         '<td>' + escapeHtml(p.logger || "-") + '</td>' +
         '<td title="' + escapeHtml(p.pattern || "") + '">' + escapeHtml(truncate(p.pattern || "-", 80)) + '</td>' +
         '<td>' + timeAgo(p.first_seen) + '</td>' +
@@ -1140,9 +1140,9 @@ async function loadSPLogs(sp) {
     for (var i = 0; i < logs.length; i++) {
       var l = logs[i]
       var d = new Date(l.dt + (l.dt.includes("Z") ? "" : "Z"))
-      html += '<tr data-idx="' + i + '" data-dt="' + d.getTime() + '" data-level="' + (l.level || "") + '" data-logger="' + escapeHtml(l.logger || "") + '" data-msg="' + escapeHtml(l.msg || "") + '" data-err="' + escapeHtml(l.err || "") + '" data-taskid="' + (l.taskID || 0) + '">' +
+      html += '<tr data-idx="' + i + '" data-dt="' + d.getTime() + '" data-level="' + escapeHtml(l.level || "") + '" data-logger="' + escapeHtml(l.logger || "") + '" data-msg="' + escapeHtml(l.msg || "") + '" data-err="' + escapeHtml(l.err || "") + '" data-taskid="' + (l.taskID || 0) + '">' +
         '<td>' + d.toLocaleTimeString() + '</td>' +
-        '<td class="level-' + (l.level || "") + '">' + (l.level || "-") + '</td>' +
+        '<td class="level-' + escapeHtml(l.level || "") + '">' + escapeHtml(l.level || "-") + '</td>' +
         '<td>' + escapeHtml(l.logger || "-") + '</td>' +
         '<td title="' + escapeHtml(l.msg || "") + '">' + escapeHtml(truncate(l.msg || "-", 60)) + '</td>' +
         '<td title="' + escapeHtml(l.err || "") + '">' + escapeHtml(truncate(l.err || "-", 60)) + '</td>' +

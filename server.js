@@ -1190,6 +1190,6 @@ async function warmCaches() {
 startLivenessProbes()
 warmCaches()
 setInterval(warmCaches, WARM_INTERVAL)
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, "127.0.0.1", () => {
   console.log(`PDP SP Dashboard running on http://0.0.0.0:${PORT}`)
 })
